@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/node_api_service.dart';
 import '../services/crypto_service.dart';
@@ -50,6 +53,43 @@ class WalletRepository {
   static Future<String?> getSavedAccountId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keyAccountId);
+  }
+
+  /// Fetches the dynamically published Cloudflare Gateway URL from Cloud Firestore
+  Future<String?> fetchRemoteGatewayUrl() async {
+    // 1. Try Firestore SDK
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('network_config')
+          .doc('gateway')
+          .get();
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        final status = data['status']?.toString();
+        final url = data['url']?.toString();
+        if (status == 'online' && url != null && url.startsWith('http')) {
+          return url.trim().replaceAll(RegExp(r'/$'), '');
+        }
+      }
+    } catch (_) {}
+
+    // 2. Try Firestore REST API fallback
+    try {
+      const restUrl =
+          'https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/gateway';
+      final res = await http.get(Uri.parse(restUrl)).timeout(const Duration(seconds: 4));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final fields = data['fields'] as Map<String, dynamic>?;
+        final status = fields?['status']?['stringValue']?.toString();
+        final url = fields?['url']?['stringValue']?.toString();
+        if (status == 'online' && url != null && url.startsWith('http')) {
+          return url.trim().replaceAll(RegExp(r'/$'), '');
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   Future<ApiResult<NodeStatus>> checkNode() => _api.getStatus();

@@ -13,6 +13,13 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────────────────────────
+    // CSII-PAY NETWORK CONFIG (Cloudflare Gateway discovery)
+    // ─────────────────────────────────────────────────────────────────
+    match /network_config/{docId} {
+      allow read, write: if true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     // CSII-PAY MARKETPLACE APPLICATIONS
     // ─────────────────────────────────────────────────────────────────
     match /marketplace_applications/{appId} {

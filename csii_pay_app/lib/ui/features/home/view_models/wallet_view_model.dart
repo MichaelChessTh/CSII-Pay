@@ -74,7 +74,15 @@ class WalletViewModel extends ChangeNotifier {
 
   Future<void> init() async {
     _setLoading(true);
-    final r = await _repo.checkNode();
+    var r = await _repo.checkNode();
+    if (!r.success) {
+      // Automatic fallback to Cloudflare Gateway when off-campus or local node unreachable
+      final gatewayUrl = await _repo.fetchRemoteGatewayUrl();
+      if (gatewayUrl != null && gatewayUrl.isNotEmpty && gatewayUrl != _repo.nodeUrl) {
+        await _repo.setNodeUrl(gatewayUrl);
+        r = await _repo.checkNode();
+      }
+    }
     if (r.success) {
       _nodeStatus = r.data;
       _appState = AppState.authRequired;
@@ -83,6 +91,31 @@ class WalletViewModel extends ChangeNotifier {
       _appState = AppState.connecting;
     }
     _setLoading(false);
+  }
+
+  Future<bool> connectToCloudGateway() async {
+    _setLoading(true);
+    _error = null;
+    final gatewayUrl = await _repo.fetchRemoteGatewayUrl();
+    if (gatewayUrl == null || gatewayUrl.isEmpty) {
+      _error = 'No active Cloudflare Gateway found in cloud configuration.';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
+    await setNodeUrl(gatewayUrl);
+    final r = await _repo.checkNode();
+    if (r.success) {
+      _nodeStatus = r.data;
+      _appState = AppState.authRequired;
+      _setLoading(false);
+      return true;
+    } else {
+      _error = 'Cloudflare Gateway unreachable: ${r.error}';
+      _setLoading(false);
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<bool> login(String accountId, String password) async {

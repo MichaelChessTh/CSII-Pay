@@ -57,6 +57,27 @@ class _ConnectScreenState extends State<ConnectScreen>
     }
   }
 
+  Future<void> _connectViaGateway() async {
+    setState(() {
+      _connecting = true;
+      _error = null;
+    });
+    final vm = context.read<WalletViewModel>();
+    final ok = await vm.connectToCloudGateway();
+    if (!ok && mounted) {
+      setState(() {
+        _error = vm.error ?? 'Failed to connect via Cloudflare Gateway';
+        _connecting = false;
+      });
+      vm.clearError();
+    } else if (mounted) {
+      setState(() {
+        _urlCtrl.text = vm.nodeUrl;
+        _connecting = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -185,20 +206,45 @@ class _ConnectScreenState extends State<ConnectScreen>
                           isLoading: _connecting,
                           width: double.infinity,
                         ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.cloud_sync_rounded, color: Color(0xFFF38020), size: 18),
+                          label: Text(
+                            'Connect via Cloud Gateway (Off-Campus)',
+                            style: GoogleFonts.outfit(
+                              color: const Color(0xFFF38020),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(double.infinity, 46),
+                            side: BorderSide(color: const Color(0xFFF38020).withValues(alpha: 0.4)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            backgroundColor: const Color(0xFFF38020).withValues(alpha: 0.08),
+                          ),
+                          onPressed: _connecting ? null : _connectViaGateway,
+                        ),
                         const SizedBox(height: 16),
                         // Quick connect shortcuts
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
                             _QuickConnectChip(
                               label: 'Localhost',
                               url: 'http://127.0.0.1:8000',
                               onTap: (u) => setState(() => _urlCtrl.text = u),
                             ),
-                            const SizedBox(width: 8),
                             _QuickConnectChip(
                               label: ':8001',
                               url: 'http://127.0.0.1:8001',
                               onTap: (u) => setState(() => _urlCtrl.text = u),
+                            ),
+                            _QuickConnectChip(
+                              label: 'Cloud Tunnel ⚡',
+                              url: '',
+                              onTap: (_) => _connectViaGateway(),
                             ),
                           ],
                         ),
