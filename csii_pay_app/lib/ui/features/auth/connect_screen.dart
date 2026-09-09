@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:csii_pay_app/ui/core/theme.dart';
-import 'package:csii_pay_app/ui/core/widgets/common_widgets.dart';
 import 'package:csii_pay_app/ui/features/home/view_models/wallet_view_model.dart';
 
 class ConnectScreen extends StatefulWidget {
@@ -15,22 +13,33 @@ class ConnectScreen extends StatefulWidget {
 
 class _ConnectScreenState extends State<ConnectScreen>
     with SingleTickerProviderStateMixin {
-  final _urlCtrl = TextEditingController(text: 'http://127.0.0.1:8000');
-  bool _connecting = false;
-  String? _error;
   late AnimationController _pulseCtrl;
   late Animation<double> _pulse;
+  late Animation<double> _glow;
+  bool _showManualConfig = false;
+  final _urlCtrl = TextEditingController();
+  bool _manualConnecting = false;
 
   @override
   void initState() {
     super.initState();
     _pulseCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 1800),
     )..repeat(reverse: true);
-    _pulse = Tween<double>(begin: 0.8, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+
+    _pulse = Tween<double>(begin: 0.94, end: 1.04).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOutCubic),
     );
+
+    _glow = Tween<double>(begin: 0.3, end: 0.7).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOutCubic),
+    );
+
+    // Automatically trigger connection seamlessly in background
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnect();
+    });
   }
 
   @override
@@ -40,85 +49,82 @@ class _ConnectScreenState extends State<ConnectScreen>
     super.dispose();
   }
 
-  Future<void> _connect() async {
-    setState(() {
-      _connecting = true;
-      _error = null;
-    });
+  Future<void> _autoConnect() async {
+    final vm = context.read<WalletViewModel>();
+    _urlCtrl.text = vm.nodeUrl;
+    await vm.init();
+  }
+
+  Future<void> _manualConnect() async {
+    setState(() => _manualConnecting = true);
     final vm = context.read<WalletViewModel>();
     await vm.setNodeUrl(_urlCtrl.text.trim());
     await vm.init();
-    if (vm.error != null) {
-      setState(() {
-        _error = vm.error;
-        _connecting = false;
-      });
-      vm.clearError();
-    }
-  }
-
-  Future<void> _connectViaGateway() async {
-    setState(() {
-      _connecting = true;
-      _error = null;
-    });
-    final vm = context.read<WalletViewModel>();
-    final ok = await vm.connectToCloudGateway();
-    if (!ok && mounted) {
-      setState(() {
-        _error = vm.error ?? 'Failed to connect via Cloudflare Gateway';
-        _connecting = false;
-      });
-      vm.clearError();
-    } else if (mounted) {
-      setState(() {
-        _urlCtrl.text = vm.nodeUrl;
-        _connecting = false;
-      });
-    }
+    if (mounted) setState(() => _manualConnecting = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    final vm = context.watch<WalletViewModel>();
+    final hasError = vm.error != null;
+
     return Scaffold(
+      backgroundColor: AppColors.bgDeep,
       body: Container(
         decoration: const BoxDecoration(gradient: AppColors.bgGradient),
         child: SafeArea(
+          bottom: true,
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(28),
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Logo
-                  ScaleTransition(
-                    scale: _pulse,
-                    child: Container(
-                      width: 96,
-                      height: 96,
-                      decoration: BoxDecoration(
-                        gradient: AppColors.brandGradient,
-                        borderRadius: BorderRadius.circular(28),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.brandPurple.withValues(alpha: 0.5),
-                            blurRadius: 40,
-                            spreadRadius: 8,
+                  // Glowing Pulsing Logo
+                  AnimatedBuilder(
+                    animation: _pulseCtrl,
+                    builder: (context, child) {
+                      return ScaleTransition(
+                        scale: _pulse,
+                        child: Container(
+                          width: 104,
+                          height: 104,
+                          decoration: BoxDecoration(
+                            gradient: AppColors.brandGradient,
+                            borderRadius: BorderRadius.circular(30),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.brandPurple
+                                    .withValues(alpha: _glow.value),
+                                blurRadius: 40,
+                                spreadRadius: 10,
+                              ),
+                              BoxShadow(
+                                color: AppColors.brandCyan
+                                    .withValues(alpha: _glow.value * 0.5),
+                                blurRadius: 25,
+                                spreadRadius: 2,
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.currency_exchange_rounded,
-                        color: Colors.white,
-                        size: 48,
-                      ),
-                    ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.diamond_outlined,
+                              color: Colors.white,
+                              size: 52,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 36),
+
+                  // Brand Title
                   Text(
                     'CSII-Pay',
                     style: GoogleFonts.outfit(
-                      fontSize: 36,
+                      fontSize: 38,
                       fontWeight: FontWeight.w800,
                       color: AppColors.textPrimary,
                       letterSpacing: -0.5,
@@ -126,178 +132,198 @@ class _ConnectScreenState extends State<ConnectScreen>
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Web3 Banking on Your Local Network',
+                    'Chulalongkorn Web3 Campus Economy',
+                    textAlign: TextAlign.center,
                     style: GoogleFonts.outfit(
                       fontSize: 14,
                       color: AppColors.textSecondary,
+                      letterSpacing: 0.2,
                     ),
                   ),
-                  const SizedBox(height: 48),
-                  GlassCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Connect to Node',
-                          style: GoogleFonts.outfit(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Enter the IP:Port of your CSII-Pay node',
-                          style: GoogleFonts.outfit(
-                            fontSize: 13,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        TextField(
-                          controller: _urlCtrl,
-                          style: GoogleFonts.outfit(
-                            color: AppColors.textPrimary,
-                            fontSize: 15,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText: 'Node URL',
-                            hintText: 'http://192.168.1.x:8000',
-                            prefixIcon: Icon(Icons.wifi_rounded,
-                                color: AppColors.brandTeal, size: 20),
-                          ),
-                          keyboardType: TextInputType.url,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.deny(RegExp(r'\s'))
-                          ],
-                          onSubmitted: (_) => _connect(),
-                        ),
-                        if (_error != null) ...[
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppColors.error.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                  color: AppColors.error.withValues(alpha: 0.3)),
+                  const SizedBox(height: 44),
+
+                  // Dynamic Seamless Connection Status
+                  if (!hasError) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: AppColors.bgSurface.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AppColors.glassStroke),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: AppColors.brandCyan,
                             ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.error_outline,
-                                    color: AppColors.error, size: 16),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _error!,
-                                    style: GoogleFonts.outfit(
-                                        color: AppColors.error, fontSize: 12),
-                                  ),
-                                ),
-                              ],
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Connecting to blockchain network...',
+                            style: GoogleFonts.outfit(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textPrimary,
                             ),
                           ),
                         ],
-                        const SizedBox(height: 24),
-                        GradientButton(
-                          label: 'Connect',
-                          icon: Icons.arrow_forward_rounded,
-                          onPressed: _connecting ? null : _connect,
-                          isLoading: _connecting,
-                          width: double.infinity,
-                        ),
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.cloud_sync_rounded, color: Color(0xFFF38020), size: 18),
-                          label: Text(
-                            'Connect via Cloud Gateway (Off-Campus)',
+                      ),
+                    ),
+                  ] else ...[
+                    // Error state with graceful retry
+                    Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                            color: AppColors.error.withValues(alpha: 0.3)),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.wifi_off_rounded,
+                                  color: AppColors.error, size: 20),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  'Node temporarily unreachable',
+                                  style: GoogleFonts.outfit(
+                                    color: AppColors.error,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Verify you are connected to the campus Wi-Fi or have internet access to reach the Cloudflare Gateway.',
+                            textAlign: TextAlign.center,
                             style: GoogleFonts.outfit(
-                              color: const Color(0xFFF38020),
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
+                              color: AppColors.textSecondary,
+                              fontSize: 12,
                             ),
                           ),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(double.infinity, 46),
-                            side: BorderSide(color: const Color(0xFFF38020).withValues(alpha: 0.4)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            backgroundColor: const Color(0xFFF38020).withValues(alpha: 0.08),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.brandPurple,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            icon: const Icon(Icons.refresh_rounded, size: 18),
+                            label: Text(
+                              'Retry Connection',
+                              style: GoogleFonts.outfit(
+                                  fontWeight: FontWeight.w600),
+                            ),
+                            onPressed: _autoConnect,
                           ),
-                          onPressed: _connecting ? null : _connectViaGateway,
-                        ),
-                        const SizedBox(height: 16),
-                        // Quick connect shortcuts
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _QuickConnectChip(
-                              label: 'Localhost',
-                              url: 'http://127.0.0.1:8000',
-                              onTap: (u) => setState(() => _urlCtrl.text = u),
-                            ),
-                            _QuickConnectChip(
-                              label: ':8001',
-                              url: 'http://127.0.0.1:8001',
-                              onTap: (u) => setState(() => _urlCtrl.text = u),
-                            ),
-                            _QuickConnectChip(
-                              label: 'Cloud Tunnel ⚡',
-                              url: '',
-                              onTap: (_) => _connectViaGateway(),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    '🔒 End-to-End Cryptographic Security\n⛓ Proof of Activity Consensus',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.outfit(
-                      fontSize: 12,
-                      color: AppColors.textMuted,
-                      height: 1.6,
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () {
+                        setState(() => _showManualConfig = !_showManualConfig);
+                      },
+                      child: Text(
+                        _showManualConfig
+                            ? 'Hide Advanced Settings'
+                            : 'Advanced Node Settings',
+                        style: GoogleFonts.outfit(
+                          color: AppColors.brandCyan,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
+
+                  // Optional manual configuration drawer if user ever needs custom IP
+                  if (_showManualConfig) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.bgCard,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.glassStroke),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          TextField(
+                            controller: _urlCtrl,
+                            style: GoogleFonts.outfit(
+                                color: Colors.white, fontSize: 13),
+                            decoration: InputDecoration(
+                              labelText: 'Custom Node URL',
+                              labelStyle: GoogleFonts.outfit(
+                                  color: AppColors.textSecondary),
+                              hintText: 'http://127.0.0.1:8000',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: _manualConnecting
+                                      ? null
+                                      : _manualConnect,
+                                  child: _manualConnecting
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Text('Connect to URL'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.brandCyan,
+                                    foregroundColor: Colors.black,
+                                  ),
+                                  onPressed: () async {
+                                    final ok = await vm.connectToCloudGateway();
+                                    if (ok && mounted) {
+                                      _urlCtrl.text = vm.nodeUrl;
+                                    }
+                                  },
+                                  child: const Text('Cloud Gateway'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickConnectChip extends StatelessWidget {
-  const _QuickConnectChip({
-    required this.label,
-    required this.url,
-    required this.onTap,
-  });
-
-  final String label;
-  final String url;
-  final void Function(String) onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => onTap(url),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.bgCard,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.glassStroke),
-        ),
-        child: Text(
-          label,
-          style: GoogleFonts.outfit(
-            fontSize: 12,
-            color: AppColors.textSecondary,
           ),
         ),
       ),

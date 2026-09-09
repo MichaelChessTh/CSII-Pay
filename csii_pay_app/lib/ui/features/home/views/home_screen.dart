@@ -59,7 +59,11 @@ class _BottomNav extends StatelessWidget {
         border: Border(top: BorderSide(color: AppColors.glassStroke)),
       ),
       child: SafeArea(
-        child: Row(
+        top: false,
+        bottom: true,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Row(
           children: [
             _NavItem(
               icon: Icons.account_balance_wallet_outlined,
@@ -99,7 +103,8 @@ class _BottomNav extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 }
 

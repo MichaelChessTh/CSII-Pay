@@ -4,6 +4,7 @@ import 'package:csii_pay_app/ui/features/home/view_models/wallet_view_model.dart
 import 'package:csii_pay_app/ui/features/home/views/home_screen.dart';
 import 'package:csii_pay_app/ui/features/auth/connect_screen.dart';
 import 'package:csii_pay_app/ui/features/auth/login_screen.dart';
+import 'package:csii_pay_app/ui/features/auth/pin_unlock_screen.dart';
 
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
@@ -36,6 +37,7 @@ class _AuthGateState extends State<AuthGate> {
           child: switch (vm.appState) {
             AppState.connecting => const ConnectScreen(key: ValueKey('connect')),
             AppState.authRequired => const LoginScreen(key: ValueKey('login')),
+            AppState.pinRequired => const PinUnlockScreen(key: ValueKey('pin')),
             AppState.authenticated => const HomeScreen(key: ValueKey('home')),
           },
         );

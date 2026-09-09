@@ -16,6 +16,8 @@ class WalletRepository {
   final MarketplaceService _marketplaceService;
   static const _keyNodeUrl = 'node_url';
   static const _keyAccountId = 'account_id';
+  static const _keySavedPassword = 'saved_password';
+  static const _keyAppPin = 'app_pin';
 
   AccountInfo? _cachedAccount;
   UserProfile? _currentProfile;
@@ -53,6 +55,45 @@ class WalletRepository {
   static Future<String?> getSavedAccountId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_keyAccountId);
+  }
+
+  static Future<String?> getSavedPassword() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keySavedPassword);
+  }
+
+  static Future<bool> hasSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final acc = prefs.getString(_keyAccountId);
+    final pwd = prefs.getString(_keySavedPassword);
+    return acc != null && acc.isNotEmpty && pwd != null && pwd.isNotEmpty;
+  }
+
+  static Future<void> clearSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyAccountId);
+    await prefs.remove(_keySavedPassword);
+  }
+
+  static Future<String?> getAppPin() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyAppPin);
+  }
+
+  static Future<bool> hasAppPin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final pin = prefs.getString(_keyAppPin);
+    return pin != null && pin.isNotEmpty;
+  }
+
+  static Future<void> setAppPin(String pin) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAppPin, pin.trim());
+  }
+
+  static Future<void> removeAppPin() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyAppPin);
   }
 
   /// Fetches the dynamically published Cloudflare Gateway URL from Cloud Firestore
@@ -104,6 +145,7 @@ class WalletRepository {
       _authToken = _extractToken(r);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyAccountId, accountId);
+      await prefs.setString(_keySavedPassword, password);
 
       // Load or build user profile
       final existingProfile = await _profileService.getUserProfile(accountId);
@@ -134,6 +176,7 @@ class WalletRepository {
       }
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyAccountId, accountId);
+      await prefs.setString(_keySavedPassword, password);
     }
     return r;
   }
@@ -165,6 +208,7 @@ class WalletRepository {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyAccountId, cleanUsername);
+    await prefs.setString(_keySavedPassword, password);
 
     // 3. Store profile in Firestore (excluding password)
     final profile = UserProfile(
@@ -352,10 +396,13 @@ class WalletRepository {
     }
   }
 
-  void logout() {
+  Future<void> logout({bool clearSaved = false}) async {
     _cachedAccount = null;
     _authToken = null;
     _privkey = null;
+    if (clearSaved) {
+      await clearSavedCredentials();
+    }
   }
 
   String? _extractToken(ApiResult<dynamic> r) {

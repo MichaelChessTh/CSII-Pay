@@ -6,7 +6,7 @@ import 'package:csii_pay_app/data/services/marketplace_service.dart';
 import 'package:csii_pay_app/domain/models/user_profile.dart';
 import 'package:csii_pay_app/domain/models/transaction_item.dart';
 
-enum AppState { connecting, authRequired, authenticated }
+enum AppState { connecting, authRequired, pinRequired, authenticated }
 
 class WalletViewModel extends ChangeNotifier {
   final WalletRepository _repo;
@@ -72,19 +72,70 @@ class WalletViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<bool> hasAppPin() => WalletRepository.hasAppPin();
+
+  Future<void> setAppPin(String pin) async {
+    await WalletRepository.setAppPin(pin);
+    notifyListeners();
+  }
+
+  Future<void> removeAppPin() async {
+    await WalletRepository.removeAppPin();
+    notifyListeners();
+  }
+
+  Future<bool> unlockWithPin(String pin) async {
+    final saved = await WalletRepository.getAppPin();
+    if (saved == pin.trim()) {
+      _appState = AppState.authenticated;
+      _startTimers();
+      await _loadAll();
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
   Future<void> init() async {
     _setLoading(true);
+    _error = null;
+
+    // 1. Attempt connection to primary/saved node URL
     var r = await _repo.checkNode();
     if (!r.success) {
-      // Automatic fallback to Cloudflare Gateway when off-campus or local node unreachable
+      // 2. Automatic fallback to Cloudflare Gateway if off-campus/mobile
       final gatewayUrl = await _repo.fetchRemoteGatewayUrl();
       if (gatewayUrl != null && gatewayUrl.isNotEmpty && gatewayUrl != _repo.nodeUrl) {
         await _repo.setNodeUrl(gatewayUrl);
         r = await _repo.checkNode();
       }
     }
+
     if (r.success) {
       _nodeStatus = r.data;
+
+      // 3. Check for saved credentials for seamless auto-login
+      final hasCreds = await WalletRepository.hasSavedCredentials();
+      if (hasCreds) {
+        final savedAcc = await WalletRepository.getSavedAccountId();
+        final savedPwd = await WalletRepository.getSavedPassword();
+        if (savedAcc != null && savedPwd != null) {
+          final loginRes = await _repo.login(savedAcc, savedPwd);
+          if (loginRes.success) {
+            final pinConfigured = await WalletRepository.hasAppPin();
+            if (pinConfigured) {
+              _appState = AppState.pinRequired;
+            } else {
+              _appState = AppState.authenticated;
+              _startTimers();
+              await _loadAll();
+            }
+            _setLoading(false);
+            return;
+          }
+        }
+      }
+
       _appState = AppState.authRequired;
     } else {
       _error = 'Cannot connect to node: ${r.error}';
@@ -332,10 +383,15 @@ class WalletViewModel extends ChangeNotifier {
     return r.error ?? 'Failed to cancel order';
   }
 
-  void logout() {
-    _repo.logout();
+  Future<void> logout({bool clearSaved = true}) async {
+    await _repo.logout(clearSaved: clearSaved);
     _appState = AppState.authRequired;
     _stopTimers();
+    _orders = [];
+    _recentBlocks = [];
+    _allBlocks = [];
+    _transactions = [];
+    _myGroups = [];
     notifyListeners();
   }
 

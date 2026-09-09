@@ -517,41 +517,64 @@ class _SendScreenState extends State<SendScreen> {
                         hintText: 'Account ID or Username',
                         prefixIcon: const Icon(Icons.person_outline_rounded,
                             color: AppColors.brandTeal, size: 20),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.qr_code_scanner_rounded,
-                              color: AppColors.brandTeal, size: 20),
-                          onPressed: () {
-                            _initScanner();
-                            setState(() => _showScanner = true);
-                          },
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_recipientCtrl.text.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear_rounded,
+                                    color: AppColors.textMuted, size: 18),
+                                onPressed: () {
+                                  _recipientCtrl.clear();
+                                  _onRecipientChanged('');
+                                },
+                              ),
+                            IconButton(
+                              icon: const Icon(Icons.qr_code_scanner_rounded,
+                                  color: AppColors.brandTeal, size: 20),
+                              onPressed: () {
+                                _initScanner();
+                                setState(() => _showScanner = true);
+                              },
+                            ),
+                          ],
                         ),
                       ),
                     ),
                     if (_isResolvingNickname) ...[
                       const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: AppColors.brandTeal),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Checking recipient nickname in database...',
-                            style: GoogleFonts.outfit(
-                                fontSize: 12, color: AppColors.textMuted),
-                          ),
-                        ],
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgDeep,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.glassStroke),
+                        ),
+                        child: Row(
+                          children: [
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: AppColors.brandTeal),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Checking recipient on network...',
+                              style: GoogleFonts.outfit(
+                                  fontSize: 12, color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
                       ),
                     ] else if (_recipientTeamInfo != null) ...[
                       const SizedBox(height: 10),
                       Container(
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           color: const Color(0xFF10B981).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                             color: const Color(0xFF10B981).withValues(alpha: 0.35),
                           ),
@@ -565,7 +588,7 @@ class _SendScreenState extends State<SendScreen> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                                    color: const Color(0xFF10B981).withValues(alpha: 0.25),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
@@ -587,46 +610,49 @@ class _SendScreenState extends State<SendScreen> {
                                   ),
                                 ),
                                 const Spacer(),
-                                GestureDetector(
+                                InkWell(
                                   onTap: () => _showTeamDetailsSheet(_recipientTeamInfo!),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        'View Details',
-                                        style: GoogleFonts.outfit(
-                                          color: const Color(0xFF10B981),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          decoration: TextDecoration.underline,
-                                          decorationColor: const Color(0xFF10B981),
-                                        ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFF10B981).withValues(alpha: 0.3),
                                       ),
-                                      const SizedBox(width: 3),
-                                      const Icon(Icons.arrow_forward_ios_rounded,
-                                          color: Color(0xFF10B981), size: 10),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(Icons.groups_rounded,
-                                    color: Color(0xFF10B981), size: 20),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _recipientTeamInfo!['name']?.toString() ?? _recipientCtrl.text.trim(),
-                                    style: GoogleFonts.outfit(
-                                      color: AppColors.textPrimary,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(Icons.groups_rounded,
+                                            color: Color(0xFF10B981), size: 14),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Team Info',
+                                          style: GoogleFonts.outfit(
+                                            color: const Color(0xFF10B981),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 3),
+                                        const Icon(Icons.arrow_forward_ios_rounded,
+                                            color: Color(0xFF10B981), size: 9),
+                                      ],
                                     ),
                                   ),
                                 ),
                               ],
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              _recipientTeamInfo!['name']?.toString() ?? _recipientCtrl.text.trim(),
+                              style: GoogleFonts.outfit(
+                                color: AppColors.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             if ((_recipientTeamInfo!['description']?.toString() ?? '').isNotEmpty) ...[
                               const SizedBox(height: 4),
@@ -641,37 +667,6 @@ class _SendScreenState extends State<SendScreen> {
                                 ),
                               ),
                             ],
-                            const SizedBox(height: 8),
-                            InkWell(
-                              onTap: () => _showTeamDetailsSheet(_recipientTeamInfo!),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: const Color(0xFF10B981).withValues(alpha: 0.3),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.info_outline_rounded,
-                                        color: Color(0xFF10B981), size: 14),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'View Team Description & Members',
-                                      style: GoogleFonts.outfit(
-                                        color: const Color(0xFF10B981),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
                           ],
                         ),
                       ),
@@ -679,32 +674,60 @@ class _SendScreenState extends State<SendScreen> {
                       const SizedBox(height: 10),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
+                            horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
                           color: AppColors.brandTeal.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                              color: AppColors.brandTeal.withValues(alpha: 0.3)),
+                              color: AppColors.brandTeal.withValues(alpha: 0.35)),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.verified_rounded,
-                                color: AppColors.brandTeal, size: 18),
-                            const SizedBox(width: 8),
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppColors.brandTeal.withValues(alpha: 0.2),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _recipientNickname!.isNotEmpty
+                                      ? _recipientNickname![0].toUpperCase()
+                                      : 'U',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.brandTeal,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Recipient: $_recipientNickname',
-                                    style: GoogleFonts.outfit(
-                                      color: AppColors.textPrimary,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          _recipientNickname!,
+                                          style: GoogleFonts.outfit(
+                                            color: AppColors.textPrimary,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      const Icon(Icons.verified_rounded,
+                                          color: AppColors.brandTeal, size: 14),
+                                    ],
                                   ),
                                   Text(
-                                    '@${_recipientCtrl.text.trim()} (Database Verified)',
+                                    '@${_recipientCtrl.text.trim()} • Verified Student',
                                     style: GoogleFonts.outfit(
                                       color: AppColors.brandTeal,
                                       fontSize: 11,
@@ -718,11 +741,29 @@ class _SendScreenState extends State<SendScreen> {
                         ),
                       ),
                     ] else if (_recipientCtrl.text.trim().isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Recipient: @${_recipientCtrl.text.trim()} (No nickname registered)',
-                        style: GoogleFonts.outfit(
-                            fontSize: 11, color: AppColors.textMuted),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgDeep,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.glassStroke),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.alternate_email_rounded,
+                                color: AppColors.textSecondary, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Recipient: @${_recipientCtrl.text.trim()} (Direct Transfer)',
+                                style: GoogleFonts.outfit(
+                                    fontSize: 12, color: AppColors.textSecondary),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ],
@@ -841,6 +882,7 @@ class _SendScreenState extends State<SendScreen> {
                 width: double.infinity,
                 height: 56,
               ),
+              SizedBox(height: MediaQuery.paddingOf(context).bottom + 28),
             ],
           ),
         ),

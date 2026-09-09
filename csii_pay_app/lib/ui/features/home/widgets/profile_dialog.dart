@@ -260,31 +260,193 @@ class ProfileDialog extends StatelessWidget {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 20),
-                      // Close button
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                              color: AppColors.brandTeal.withValues(alpha: 0.5),
+                      const SizedBox(height: 16),
+
+                      // Security & App PIN Lock section
+                      FutureBuilder<bool>(
+                        future: vm.hasAppPin(),
+                        builder: (context, snapshot) {
+                          final hasPin = snapshot.data ?? false;
+                          return Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: AppColors.bgCard,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: (hasPin ? AppColors.brandCyan : AppColors.glassStroke)
+                                    .withValues(alpha: 0.3),
+                              ),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      hasPin ? Icons.lock_outline_rounded : Icons.lock_open_rounded,
+                                      color: hasPin ? AppColors.brandCyan : AppColors.textMuted,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'App PIN Protection',
+                                      style: GoogleFonts.outfit(
+                                        color: AppColors.textPrimary,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: (hasPin ? AppColors.brandCyan : AppColors.textMuted)
+                                            .withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        hasPin ? 'Active' : 'Optional',
+                                        style: GoogleFonts.outfit(
+                                          color: hasPin ? AppColors.brandCyan : AppColors.textMuted,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  hasPin
+                                      ? 'A 4-digit PIN is required to unlock your account on launch.'
+                                      : 'Quickly lock your wallet with an optional 4-digit PIN without typing your full password.',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 11,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          side: BorderSide(
+                                            color: AppColors.brandCyan.withValues(alpha: 0.5),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(vertical: 8),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                        ),
+                                        onPressed: () => _showSetPinDialog(context, vm, hasPin),
+                                        child: Text(
+                                          hasPin ? 'Change PIN' : 'Set Up PIN',
+                                          style: GoogleFonts.outfit(
+                                            color: AppColors.brandCyan,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    if (hasPin) ...[
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          style: OutlinedButton.styleFrom(
+                                            side: BorderSide(
+                                              color: AppColors.error.withValues(alpha: 0.4),
+                                            ),
+                                            padding: const EdgeInsets.symmetric(vertical: 8),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                          ),
+                                          onPressed: () async {
+                                            await vm.removeAppPin();
+                                            if (context.mounted) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('App PIN removed. Direct login active.'),
+                                                  behavior: SnackBarBehavior.floating,
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: Text(
+                                            'Remove PIN',
+                                            style: GoogleFonts.outfit(
+                                              color: AppColors.error,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Log out & Close buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                side: BorderSide(
+                                  color: AppColors.error.withValues(alpha: 0.4),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                vm.logout(clearSaved: true);
+                              },
+                              icon: const Icon(Icons.logout_rounded,
+                                  color: AppColors.error, size: 16),
+                              label: Text(
+                                'Log Out',
+                                style: GoogleFonts.outfit(
+                                  color: AppColors.error,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
                             ),
                           ),
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.check_rounded,
-                              color: AppColors.brandTeal, size: 18),
-                          label: Text(
-                            'Done',
-                            style: GoogleFonts.outfit(
-                              color: AppColors.brandTeal,
-                              fontWeight: FontWeight.w600,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.brandPurple,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.check_rounded, size: 16),
+                              label: Text(
+                                'Done',
+                                style: GoogleFonts.outfit(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ],
                   ),
@@ -292,6 +454,116 @@ class ProfileDialog extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  static void _showSetPinDialog(BuildContext context, WalletViewModel vm, bool isChanging) {
+    final pinCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.bgCard,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: AppColors.glassStroke),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.lock_rounded, color: AppColors.brandCyan, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                isChanging ? 'Change 4-Digit PIN' : 'Set 4-Digit PIN',
+                style: GoogleFonts.outfit(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Enter a 4-digit number to quickly unlock CSII-Pay on this phone.',
+                style: GoogleFonts.outfit(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: pinCtrl,
+                keyboardType: TextInputType.number,
+                obscureText: true,
+                maxLength: 4,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, letterSpacing: 8),
+                decoration: InputDecoration(
+                  labelText: 'New 4-Digit PIN',
+                  counterText: '',
+                  labelStyle: GoogleFonts.outfit(color: AppColors.textSecondary, letterSpacing: 0),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: confirmCtrl,
+                keyboardType: TextInputType.number,
+                obscureText: true,
+                maxLength: 4,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: GoogleFonts.outfit(color: Colors.white, fontSize: 16, letterSpacing: 8),
+                decoration: InputDecoration(
+                  labelText: 'Confirm PIN',
+                  counterText: '',
+                  labelStyle: GoogleFonts.outfit(color: AppColors.textSecondary, letterSpacing: 0),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  errorText!,
+                  style: GoogleFonts.outfit(color: AppColors.error, fontSize: 12),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: GoogleFonts.outfit(color: AppColors.textMuted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.brandCyan,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () async {
+                final p = pinCtrl.text.trim();
+                final c = confirmCtrl.text.trim();
+                if (p.length != 4) {
+                  setDialogState(() => errorText = 'PIN must be exactly 4 digits.');
+                  return;
+                }
+                if (p != c) {
+                  setDialogState(() => errorText = 'PINs do not match.');
+                  return;
+                }
+                await vm.setAppPin(p);
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('App PIN configured successfully!'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              },
+              child: Text('Save PIN', style: GoogleFonts.outfit(fontWeight: FontWeight.bold)),
+            ),
+          ],
         ),
       ),
     );

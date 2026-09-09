@@ -1323,22 +1323,31 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
             ? (vm.account?.balances.csp ?? 0.0)
             : (vm.account?.balances.bdp ?? 0.0));
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bgSurface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.9,
       ),
-      padding: EdgeInsets.fromLTRB(
-        20,
-        20,
-        20,
-        MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.bgSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          20,
+          20,
+          MediaQuery.of(context).viewInsets.bottom +
+              MediaQuery.paddingOf(context).bottom +
+              24,
+        ),
+        child: SafeArea(
+          top: false,
+          bottom: true,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
             Center(
               child: Container(
                 width: 40,
@@ -1614,7 +1623,10 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
               isLoading: _submitting,
               onPressed: _submit,
             ),
+            const SizedBox(height: 12),
           ],
+        ),
+      ),
         ),
       ),
     );
@@ -1715,22 +1727,31 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
     final vm = context.watch<WalletViewModel>();
     final isMine = job.creatorAccountId == vm.currentAccountId;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bgSurface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.88,
       ),
-      padding: EdgeInsets.fromLTRB(
-        20,
-        20,
-        20,
-        MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.bgSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          20,
+          20,
+          MediaQuery.of(context).viewInsets.bottom +
+              MediaQuery.paddingOf(context).bottom +
+              24,
+        ),
+        child: SafeArea(
+          top: false,
+          bottom: true,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
             Center(
               child: Container(
                 width: 40,
@@ -2101,6 +2122,8 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
               ),
             ],
           ],
+        ),
+      ),
         ),
       ),
     );

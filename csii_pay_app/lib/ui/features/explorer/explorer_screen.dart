@@ -299,6 +299,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                       onTap: () => _showBlockDetails(context, b),
                       onCopy: (txt, lbl) => _copy(context, txt, lbl),
                     )),
+              SizedBox(height: MediaQuery.paddingOf(context).bottom + 28),
             ],
           ),
         ),
@@ -697,22 +698,31 @@ class _BlockDetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bgSurface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
       ),
-      padding: EdgeInsets.fromLTRB(
-        24,
-        20,
-        24,
-        MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.bgSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+          24,
+          20,
+          24,
+          MediaQuery.of(context).viewInsets.bottom +
+              MediaQuery.paddingOf(context).bottom +
+              20,
+        ),
+        child: SafeArea(
+          top: false,
+          bottom: true,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             Center(
               child: Container(
                 width: 40,
@@ -813,6 +823,8 @@ class _BlockDetailSheet extends StatelessWidget {
                 );
               }),
           ],
+        ),
+      ),
         ),
       ),
     );
