@@ -19,11 +19,24 @@ import subprocess
 import urllib.request
 import urllib.error
 import json
+import ssl
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
 except Exception:
     pass
+
+def _get_ssl_context():
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    try:
+        return ssl.create_default_context()
+    except Exception:
+        pass
+    return ssl._create_unverified_context()
 
 FIRESTORE_GATEWAY_DOC = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/gateway"
 GATEWAY_PORT = 8080
@@ -34,6 +47,7 @@ class TunnelManager:
         self.gateway_process = None
         self.current_url = None
         self.running = True
+        self.ssl_ctx = _get_ssl_context()
 
     def publish_to_firestore(self, url, status="online"):
         try:
@@ -51,10 +65,19 @@ class TunnelManager:
                 method="PATCH",
                 headers={"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                if resp.status in (200, 204):
-                    print(f"[{time.strftime('%H:%M:%S')}] ✓ Published gateway URL to Firestore: {url} ({status})")
-                    return True
+            try:
+                with urllib.request.urlopen(req, timeout=5.0, context=self.ssl_ctx) as resp:
+                    if resp.status in (200, 204):
+                        print(f"[{time.strftime('%H:%M:%S')}] ✓ Published gateway URL to Firestore: {url} ({status})")
+                        return True
+            except Exception as ssl_err:
+                if "CERTIFICATE_VERIFY_FAILED" in str(ssl_err) or "certificate verify failed" in str(ssl_err):
+                    self.ssl_ctx = ssl._create_unverified_context()
+                    with urllib.request.urlopen(req, timeout=5.0, context=self.ssl_ctx) as resp:
+                        if resp.status in (200, 204):
+                            print(f"[{time.strftime('%H:%M:%S')}] ✓ Published gateway URL to Firestore: {url} ({status})")
+                            return True
+                raise ssl_err
         except Exception as e:
             print(f"[{time.strftime('%H:%M:%S')}] ⚠ Failed to publish to Firestore: {e}")
             return False
