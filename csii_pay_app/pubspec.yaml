@@ -1,0 +1,61 @@
+name: csii_pay_app
+description: "CSII-Pay — Web3 Banking App. Two-layer crypto wallet with QR payments."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  provider: ^6.1.2
+
+  # Networking
+  http: ^1.2.1
+
+  # QR code generation
+  qr_flutter: ^4.1.0
+
+  # Fonts
+  google_fonts: ^6.2.1
+
+  # Local storage (node URL / session)
+  shared_preferences: ^2.3.2
+
+  # Number formatting
+  intl: ^0.19.0
+
+  # Charts for activity
+  fl_chart: ^0.68.0
+
+  # QR scanning (camera — available on macOS/iOS/Android)
+  mobile_scanner: ^5.2.3
+
+  # SHA-256 hashing for tx ID generation
+  crypto: ^3.0.5
+
+  # Haptics
+  flutter_vibrate: ^1.3.0
+
+  cupertino_icons: ^1.0.8
+  firebase_core: ^4.14.0
+  cloud_firestore: ^6.9.0
+  url_launcher: ^6.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
+
+dependency_overrides:
+  firebase_core_web: 3.10.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+  fonts: []

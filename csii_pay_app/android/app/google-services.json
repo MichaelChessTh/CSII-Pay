@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "796199113187",
+    "project_id": "csii-pay",
+    "storage_bucket": "csii-pay.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:796199113187:android:a1f8e989ce1a82cd1910d6",
+        "android_client_info": {
+          "package_name": "com.csiipay.csii_pay_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD0Vf5aE18CdY47TBU-Gb-7U0SuY8qFemk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
