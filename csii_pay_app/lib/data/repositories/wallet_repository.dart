@@ -237,6 +237,9 @@ class WalletRepository {
       _cachedAccount = AccountInfo(
         accountId: r.data!.accountId,
         balances: r.data!.balances,
+        frozenBalances: r.data!.frozenBalances,
+        isVerified: r.data!.isVerified,
+        verificationStatus: r.data!.verificationStatus,
         nonce: r.data!.nonce,
         salt: r.data!.salt,
         publicKey: r.data!.publicKey,
@@ -282,6 +285,9 @@ class WalletRepository {
       _cachedAccount = AccountInfo(
         accountId: acc.accountId,
         balances: acc.balances,
+        frozenBalances: acc.frozenBalances,
+        isVerified: acc.isVerified,
+        verificationStatus: acc.verificationStatus,
         nonce: acc.nonce + 1,
         salt: acc.salt,
         publicKey: acc.publicKey,

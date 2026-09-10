@@ -17,6 +17,8 @@ class ExchangeScreen extends StatefulWidget {
 class _ExchangeScreenState extends State<ExchangeScreen> with SingleTickerProviderStateMixin {
   late TabController _tabCtrl;
   Timer? _autoRefreshTimer;
+  bool _isProMode = false;
+  int _casualTabIndex = 0; // 0: Buy, 1: Sell, 2: My Sells
 
   @override
   void initState() {
@@ -49,6 +51,67 @@ class _ExchangeScreenState extends State<ExchangeScreen> with SingleTickerProvid
     );
   }
 
+  Widget _buildModePill(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.brandPurple : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.outfit(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCasualTabItem(int index, String label, IconData icon) {
+    final isSelected = _casualTabIndex == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _casualTabIndex = index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.brandPurple.withValues(alpha: 0.2) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: isSelected ? Border.all(color: AppColors.brandPurple.withValues(alpha: 0.4)) : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 15,
+                color: isSelected ? AppColors.brandPurple : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(
+                    fontSize: 12,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? AppColors.brandPurple : AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<WalletViewModel>();
@@ -56,94 +119,1161 @@ class _ExchangeScreenState extends State<ExchangeScreen> with SingleTickerProvid
     final allOrders = vm.orders;
     final openOrders = allOrders.where((o) => o.status == 'OPEN').toList();
     final myOrders = allOrders.where((o) => o.maker == myAccount).toList();
+    final myOpenSells = myOrders.where((o) => o.status == 'OPEN').toList();
 
     return Scaffold(
       backgroundColor: AppColors.bgDeep,
       appBar: AppBar(
-        title: Text(
-          'P2P Smart Contracts',
-          style: GoogleFonts.outfit(fontWeight: FontWeight.w700),
-        ),
-        actions: [
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(right: 6),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _isProMode ? 'Pro Exchange' : 'P2P Exchange',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 18),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(3),
               decoration: BoxDecoration(
-                color: AppColors.success.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+                color: AppColors.bgCard,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.glassStroke),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
-                      color: AppColors.success,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    'Auto-Sync 3s',
-                    style: GoogleFonts.outfit(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.success,
-                    ),
-                  ),
+                  _buildModePill('Casual', !_isProMode, () {
+                    setState(() => _isProMode = false);
+                  }),
+                  _buildModePill('Pro', _isProMode, () {
+                    setState(() => _isProMode = true);
+                  }),
                 ],
               ),
             ),
-          ),
+          ],
+        ),
+        actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh Orders',
             onPressed: vm.refresh,
           ),
         ],
-        bottom: TabBar(
-          controller: _tabCtrl,
-          indicatorColor: AppColors.brandPurple,
-          indicatorWeight: 3,
-          labelColor: AppColors.brandPurple,
-          unselectedLabelColor: AppColors.textSecondary,
-          labelStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 14),
-          tabs: [
-            Tab(text: 'Market Orders (${openOrders.length})'),
-            Tab(text: 'My Contracts (${myOrders.length})'),
-          ],
-        ),
+        bottom: _isProMode
+            ? TabBar(
+                controller: _tabCtrl,
+                indicatorColor: AppColors.brandPurple,
+                indicatorWeight: 3,
+                labelColor: AppColors.brandPurple,
+                unselectedLabelColor: AppColors.textSecondary,
+                labelStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 14),
+                tabs: [
+                  Tab(text: 'Market Orders (${openOrders.length})'),
+                  Tab(text: 'My Contracts (${myOrders.length})'),
+                ],
+              )
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(52),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: AppColors.bgCard,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.glassStroke),
+                  ),
+                  child: Row(
+                    children: [
+                      _buildCasualTabItem(0, 'Buy', Icons.shopping_bag_outlined),
+                      _buildCasualTabItem(1, 'Sell', Icons.sell_outlined),
+                      _buildCasualTabItem(2, 'My Sells (${myOpenSells.length})', Icons.folder_outlined),
+                    ],
+                  ),
+                ),
+              ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openCreateOrderDialog(context),
-        backgroundColor: AppColors.brandPurple,
-        icon: const Icon(Icons.add_rounded, color: Colors.white),
-        label: Text(
-          'New Contract',
-          style: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: Colors.white),
-        ),
-      ),
+      floatingActionButton: _isProMode
+          ? FloatingActionButton.extended(
+              onPressed: () => _openCreateOrderDialog(context),
+              backgroundColor: AppColors.brandPurple,
+              icon: const Icon(Icons.add_rounded, color: Colors.white),
+              label: Text(
+                'New Contract',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: Colors.white),
+              ),
+            )
+          : null,
       body: Container(
         decoration: const BoxDecoration(gradient: AppColors.bgGradient),
-        child: TabBarView(
-          controller: _tabCtrl,
-          children: [
-            _OrderListView(
-              orders: openOrders,
-              isMarket: true,
-              currentAccount: myAccount,
+        child: _isProMode
+            ? TabBarView(
+                controller: _tabCtrl,
+                children: [
+                  _OrderListView(
+                    orders: openOrders,
+                    isMarket: true,
+                    currentAccount: myAccount,
+                  ),
+                  _OrderListView(
+                    orders: myOrders,
+                    isMarket: false,
+                    currentAccount: myAccount,
+                  ),
+                ],
+              )
+            : IndexedStack(
+                index: _casualTabIndex,
+                children: [
+                  const _CasualBuyView(),
+                  _CasualSellView(
+                    onOrderCreated: () => setState(() => _casualTabIndex = 2),
+                  ),
+                  _CasualMySellsView(myOrders: myOpenSells),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class _CasualBuyView extends StatefulWidget {
+  const _CasualBuyView();
+
+  @override
+  State<_CasualBuyView> createState() => _CasualBuyViewState();
+}
+
+class _CasualBuyViewState extends State<_CasualBuyView> {
+  String _buyToken = 'BDP';
+  final _payCtrl = TextEditingController();
+  bool _isSwapping = false;
+
+  @override
+  void dispose() {
+    _payCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = context.watch<WalletViewModel>();
+    final payToken = _buyToken == 'BDP' ? 'CSP' : 'BDP';
+    final userPayBalance = _buyToken == 'BDP' ? vm.cspBalance : vm.bdpBalance;
+    final payAmount = double.tryParse(_payCtrl.text.trim()) ?? 0.0;
+    final preview = vm.previewQuickSwap(buyToken: _buyToken, payAmount: payAmount);
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        MediaQuery.paddingOf(context).bottom + 24,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Token Selection Switcher
+          GlassCard(
+            padding: const EdgeInsets.all(6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_buyToken != 'BDP') {
+                        setState(() {
+                          _buyToken = 'BDP';
+                          _payCtrl.clear();
+                        });
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _buyToken == 'BDP' ? AppColors.brandPurple : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.diamond_outlined, size: 16, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Buy BDP (with CSP)',
+                            style: GoogleFonts.outfit(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: _buyToken == 'BDP' ? Colors.white : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_buyToken != 'CSP') {
+                        setState(() {
+                          _buyToken = 'CSP';
+                          _payCtrl.clear();
+                        });
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _buyToken == 'CSP' ? AppColors.brandPurple : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.account_balance_wallet_outlined, size: 16, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Buy CSP (with BDP)',
+                            style: GoogleFonts.outfit(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: _buyToken == 'CSP' ? Colors.white : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            _OrderListView(
-              orders: myOrders,
-              isMarket: false,
-              currentAccount: myAccount,
+          ),
+          const SizedBox(height: 14),
+
+          // Market Liquidity & Best Rate Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.water_drop_rounded, size: 18, color: AppColors.brandTeal),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Market Liquidity',
+                      style: GoogleFonts.outfit(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgSurface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.glassStroke),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Cheapest Rate',
+                              style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              preview.bestRate > 0
+                                  ? '${preview.bestRate.toStringAsFixed(2)} $payToken'
+                                  : 'No offers',
+                              style: GoogleFonts.outfit(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: preview.bestRate > 0 ? AppColors.brandTeal : AppColors.textMuted,
+                              ),
+                            ),
+                            Text(
+                              preview.bestRate > 0 ? 'per 1 $_buyToken' : 'available now',
+                              style: GoogleFonts.outfit(fontSize: 10, color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgSurface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.glassStroke),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Total Available',
+                              style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${preview.totalAvailableLiquidity.toStringAsFixed(2)} $_buyToken',
+                              style: GoogleFonts.outfit(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.brandPurple,
+                              ),
+                            ),
+                            Text(
+                              'on orderbook',
+                              style: GoogleFonts.outfit(fontSize: 10, color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
+          ),
+          const SizedBox(height: 14),
+
+          // Pay Amount Input Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'You Pay ($payToken)',
+                      style: GoogleFonts.outfit(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _payCtrl.text = userPayBalance.toStringAsFixed(2);
+                        });
+                      },
+                      child: Text(
+                        'Balance: ${userPayBalance.toStringAsFixed(2)} $payToken',
+                        style: GoogleFonts.outfit(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.brandPurple,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _payCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: GoogleFonts.outfit(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '0.00',
+                    hintStyle: GoogleFonts.outfit(color: AppColors.textMuted),
+                    suffixText: payToken,
+                    suffixStyle: GoogleFonts.outfit(fontWeight: FontWeight.w700, color: AppColors.brandPurple),
+                    filled: true,
+                    fillColor: AppColors.bgSurface,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _percentChip('25%', () => setState(() => _payCtrl.text = (userPayBalance * 0.25).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('50%', () => setState(() => _payCtrl.text = (userPayBalance * 0.50).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('75%', () => setState(() => _payCtrl.text = (userPayBalance * 0.75).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('MAX', () => setState(() => _payCtrl.text = userPayBalance.toStringAsFixed(2))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Orderbook Depth & Average Rate Summary Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Execution Summary',
+                  style: GoogleFonts.outfit(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _summaryRow(
+                  label: 'You Receive',
+                  value: '≈ ${preview.receivedAmount.toStringAsFixed(2)} $_buyToken',
+                  isHighlight: true,
+                ),
+                const Divider(color: AppColors.glassStroke, height: 18),
+                _summaryRow(
+                  label: 'Average Rate',
+                  value: preview.receivedAmount > 0
+                      ? '1 $_buyToken = ${preview.averageRate.toStringAsFixed(3)} $payToken'
+                      : (preview.bestRate > 0 ? '1 $_buyToken = ${preview.bestRate.toStringAsFixed(2)} $payToken' : '-'),
+                ),
+                const Divider(color: AppColors.glassStroke, height: 18),
+                _summaryRow(
+                  label: 'Order Distribution',
+                  value: preview.ordersCount > 0
+                      ? '${preview.ordersCount} matching order(s)'
+                      : (preview.totalAvailableLiquidity > 0 ? 'Ready to match' : 'No sellers available'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Validation / Warning banners
+          if (payAmount > userPayBalance)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Insufficient $payToken balance (You have ${userPayBalance.toStringAsFixed(2)})',
+                      style: GoogleFonts.outfit(fontSize: 12, color: AppColors.error, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (payAmount > 0 && !preview.hasSufficientLiquidity)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Amount exceeds total exchange liquidity (${preview.totalAvailableLiquidity.toStringAsFixed(2)} $_buyToken). Partial fill will occur.',
+                      style: GoogleFonts.outfit(fontSize: 12, color: Colors.orangeAccent, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Confirm Buy Button
+          GradientButton(
+            label: _isSwapping
+                ? 'Processing Swap...'
+                : 'Buy $_buyToken (Pay ${payAmount > 0 ? payAmount.toStringAsFixed(2) : "0.00"} $payToken)',
+            icon: Icons.flash_on_rounded,
+            onPressed: (_isSwapping ||
+                    payAmount <= 0 ||
+                    payAmount > userPayBalance ||
+                    preview.receivedAmount <= 0)
+                ? null
+                : () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    setState(() => _isSwapping = true);
+                    final err = await vm.quickSwapBuy(buyToken: _buyToken, payAmount: payAmount);
+                    if (!mounted) return;
+                    setState(() => _isSwapping = false);
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(err == null
+                            ? 'Success! Received ${preview.receivedAmount.toStringAsFixed(2)} $_buyToken'
+                            : 'Swap error: $err'),
+                        backgroundColor: err == null ? AppColors.success : AppColors.error,
+                      ),
+                    );
+                    if (err == null) {
+                      _payCtrl.clear();
+                    }
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _percentChip(String label, VoidCallback onTap) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.bgSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.glassStroke),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: GoogleFonts.outfit(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _summaryRow({required String label, required String value, bool isHighlight = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.outfit(fontSize: 13, color: AppColors.textSecondary),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.outfit(
+            fontSize: isHighlight ? 16 : 13,
+            fontWeight: isHighlight ? FontWeight.w800 : FontWeight.w600,
+            color: isHighlight ? AppColors.success : AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CasualSellView extends StatefulWidget {
+  final VoidCallback onOrderCreated;
+  const _CasualSellView({required this.onOrderCreated});
+
+  @override
+  State<_CasualSellView> createState() => _CasualSellViewState();
+}
+
+class _CasualSellViewState extends State<_CasualSellView> {
+  String _sellToken = 'BDP';
+  final _amountCtrl = TextEditingController();
+  final _rateCtrl = TextEditingController();
+  bool _isPlacing = false;
+
+  @override
+  void dispose() {
+    _amountCtrl.dispose();
+    _rateCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = context.watch<WalletViewModel>();
+    final receiveToken = _sellToken == 'BDP' ? 'CSP' : 'BDP';
+    final userSellBalance = _sellToken == 'BDP' ? vm.bdpBalance : vm.cspBalance;
+    final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0.0;
+    final rate = double.tryParse(_rateCtrl.text.trim()) ?? 0.0;
+    final receiveAmount = amount * rate;
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        MediaQuery.paddingOf(context).bottom + 24,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Token Selection Switcher
+          GlassCard(
+            padding: const EdgeInsets.all(6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_sellToken != 'BDP') {
+                        setState(() {
+                          _sellToken = 'BDP';
+                          _amountCtrl.clear();
+                        });
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _sellToken == 'BDP' ? AppColors.brandPurple : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.diamond_outlined, size: 16, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Sell BDP (Get CSP)',
+                            style: GoogleFonts.outfit(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: _sellToken == 'BDP' ? Colors.white : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_sellToken != 'CSP') {
+                        setState(() {
+                          _sellToken = 'CSP';
+                          _amountCtrl.clear();
+                        });
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _sellToken == 'CSP' ? AppColors.brandPurple : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.account_balance_wallet_outlined, size: 16, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Sell CSP (Get BDP)',
+                            style: GoogleFonts.outfit(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: _sellToken == 'CSP' ? Colors.white : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Sell Amount Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Amount to Sell ($_sellToken)',
+                      style: GoogleFonts.outfit(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _amountCtrl.text = userSellBalance.toStringAsFixed(2);
+                        });
+                      },
+                      child: Text(
+                        'Available: ${userSellBalance.toStringAsFixed(2)} $_sellToken',
+                        style: GoogleFonts.outfit(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.brandPurple,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: GoogleFonts.outfit(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '0.00',
+                    hintStyle: GoogleFonts.outfit(color: AppColors.textMuted),
+                    suffixText: _sellToken,
+                    suffixStyle: GoogleFonts.outfit(fontWeight: FontWeight.w700, color: AppColors.brandPurple),
+                    filled: true,
+                    fillColor: AppColors.bgSurface,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _percentChip('25%', () => setState(() => _amountCtrl.text = (userSellBalance * 0.25).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('50%', () => setState(() => _amountCtrl.text = (userSellBalance * 0.50).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('75%', () => setState(() => _amountCtrl.text = (userSellBalance * 0.75).toStringAsFixed(2))),
+                    const SizedBox(width: 8),
+                    _percentChip('MAX', () => setState(() => _amountCtrl.text = userSellBalance.toStringAsFixed(2))),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Desired Rate Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Desired Rate ($receiveToken per 1 $_sellToken)',
+                  style: GoogleFonts.outfit(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _rateCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: GoogleFonts.outfit(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'e.g. 1.20',
+                    hintStyle: GoogleFonts.outfit(color: AppColors.textMuted),
+                    suffixText: '$receiveToken / $_sellToken',
+                    suffixStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: AppColors.brandTeal, fontSize: 12),
+                    filled: true,
+                    fillColor: AppColors.bgSurface,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: AppColors.glassStroke),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Calculated Received Amount Card
+          GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'You Will Receive',
+                  style: GoogleFonts.outfit(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Text(
+                      '≈ ${receiveAmount.toStringAsFixed(2)} $receiveToken',
+                      style: GoogleFonts.outfit(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.success,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Smart contract locks your $_sellToken in escrow and automatically conducts trades.',
+                  style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          if (amount > userSellBalance)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Insufficient $_sellToken balance (You have ${userSellBalance.toStringAsFixed(2)})',
+                      style: GoogleFonts.outfit(fontSize: 12, color: AppColors.error, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Place Sell Order Button
+          GradientButton(
+            label: _isPlacing ? 'Placing Order...' : 'Confirm & Place Sell Order',
+            icon: Icons.check_circle_outline_rounded,
+            onPressed: (_isPlacing || amount <= 0 || rate <= 0 || amount > userSellBalance)
+                ? null
+                : () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    setState(() => _isPlacing = true);
+                    final reqAmt = amount * rate;
+                    final err = await vm.createOrder(
+                      offerToken: _sellToken,
+                      offerAmount: amount,
+                      requestToken: receiveToken,
+                      requestAmount: reqAmt,
+                      allowPartial: true,
+                    );
+                    if (!mounted) return;
+                    setState(() => _isPlacing = false);
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(err == null
+                            ? 'Sell order created! Added to My Sells.'
+                            : 'Failed to create order: $err'),
+                        backgroundColor: err == null ? AppColors.success : AppColors.error,
+                      ),
+                    );
+                    if (err == null) {
+                      _amountCtrl.clear();
+                      _rateCtrl.clear();
+                      widget.onOrderCreated();
+                    }
+                  },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _percentChip(String label, VoidCallback onTap) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.bgSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.glassStroke),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: GoogleFonts.outfit(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CasualMySellsView extends StatelessWidget {
+  final List<Order> myOrders;
+  const _CasualMySellsView({required this.myOrders});
+
+  void _confirmCancel(BuildContext context, Order order) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Cancel Sell Order', style: GoogleFonts.outfit(fontWeight: FontWeight.w700)),
+        content: Text(
+          'Are you sure you want to cancel order #${order.id.substring(0, 8)}? Escrowed ${order.offerAmount} ${order.offerToken} will be immediately refunded to your wallet.',
+          style: GoogleFonts.outfit(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Keep Order', style: GoogleFonts.outfit(color: AppColors.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final vm = context.read<WalletViewModel>();
+              final err = await vm.cancelOrder(order.id);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(err == null ? 'Order cancelled and funds refunded' : 'Error: $err'),
+                    backgroundColor: err == null ? AppColors.success : AppColors.error,
+                  ),
+                );
+              }
+            },
+            child: Text('Cancel Order', style: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (myOrders.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.folder_open_rounded, size: 64, color: AppColors.textMuted),
+              const SizedBox(height: 16),
+              Text(
+                'No Active Sell Orders',
+                style: GoogleFonts.outfit(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'When you place a sell order in Casual or Pro mode, it will appear here so you can easily manage or cancel it.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.outfit(fontSize: 13, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        MediaQuery.paddingOf(context).bottom + 24,
+      ),
+      itemCount: myOrders.length,
+      itemBuilder: (context, index) {
+        final order = myOrders[index];
+        final rate = order.offerAmount > 0
+            ? (order.requestAmount / order.offerAmount).toStringAsFixed(3)
+            : '0.0';
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: GlassCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '#${order.id.length > 8 ? order.id.substring(0, 8) : order.id}',
+                      style: GoogleFonts.outfit(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.brandTeal,
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.success.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        order.status,
+                        style: GoogleFonts.outfit(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.success,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Selling',
+                            style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${order.offerAmount.toStringAsFixed(2)} ${order.offerToken}',
+                            style: GoogleFonts.outfit(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_rounded, color: AppColors.textMuted, size: 18),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Asking',
+                            style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${order.requestAmount.toStringAsFixed(2)} ${order.requestToken}',
+                            style: GoogleFonts.outfit(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.brandPurple,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        'Rate: 1 ${order.offerToken} = $rate ${order.requestToken}',
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.outfit(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        side: const BorderSide(color: AppColors.error),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () => _confirmCancel(context, order),
+                      icon: const Icon(Icons.close_rounded, size: 14),
+                      label: Text(
+                        'Cancel Order',
+                        style: GoogleFonts.outfit(fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

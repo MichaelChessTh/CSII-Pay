@@ -54,6 +54,9 @@ class WalletBalance {
 class AccountInfo {
   final String accountId;
   final WalletBalance balances;
+  final WalletBalance frozenBalances;
+  final bool isVerified;
+  final String verificationStatus;
   final int nonce;
   final String? salt;
   final String? publicKey;
@@ -62,6 +65,9 @@ class AccountInfo {
   const AccountInfo({
     required this.accountId,
     required this.balances,
+    this.frozenBalances = const WalletBalance(csp: 0, bdp: 0),
+    this.isVerified = false,
+    this.verificationStatus = 'PENDING',
     required this.nonce,
     this.salt,
     this.publicKey,
@@ -71,6 +77,9 @@ class AccountInfo {
   factory AccountInfo.fromJson(Map<String, dynamic> j) => AccountInfo(
         accountId: j['account_id'] ?? '',
         balances: WalletBalance.fromJson(j['balances'] ?? {}),
+        frozenBalances: WalletBalance.fromJson(j['frozen_balances'] ?? {}),
+        isVerified: j['is_verified'] ?? false,
+        verificationStatus: j['verification_status'] ?? (j['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: j['nonce'] ?? 0,
         salt: j['salt'] as String?,
         publicKey: j['public_key'] as String?,
@@ -215,6 +224,9 @@ class NodeApiService {
       final acc = AccountInfo(
         accountId: accountId,
         balances: WalletBalance.fromJson(r.data!['balances'] ?? {}),
+        frozenBalances: WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
+        isVerified: r.data!['is_verified'] ?? false,
+        verificationStatus: r.data!['verification_status'] ?? (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: r.data!['nonce'] ?? 0,
         salt: r.data!['salt'] as String?,
         publicKey: r.data!['public_key'] as String?,
@@ -230,6 +242,9 @@ class NodeApiService {
       final acc = AccountInfo(
         accountId: accountId,
         balances: WalletBalance.fromJson(r.data!['balances'] ?? {}),
+        frozenBalances: WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
+        isVerified: r.data!['is_verified'] ?? false,
+        verificationStatus: r.data!['verification_status'] ?? (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: r.data!['nonce'] ?? 0,
         salt: r.data!['salt'] as String?,
         publicKey: r.data!['public_key'] as String?,

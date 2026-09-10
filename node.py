@@ -323,11 +323,15 @@ class BlockchainState:
                 pwd_hash, salt = hash_password(password, salt)
                 if not public_key:
                     _, public_key = derive_account_keypair(password, salt)
+            is_council = (account_id == GENESIS_ACCOUNT)
             self.accounts[account_id] = {
                 "password_hash": pwd_hash,
                 "salt": salt,
                 "public_key": public_key,
-                "balances": {"CSP": float(initial_csp), "BDP": float(initial_bdp)},
+                "balances": {"CSP": float(initial_csp), "BDP": float(initial_bdp) if is_council else 0.0},
+                "frozen_balances": {"CSP": 0.0, "BDP": 0.0 if is_council else float(initial_bdp)},
+                "is_verified": is_council,
+                "verification_status": "VERIFIED" if is_council else "PENDING",
                 "nonce": 0,
                 "last_active": time.time(),
                 "activity": {
@@ -419,11 +423,15 @@ class BlockchainState:
                     if not verify_transaction_signature(tx, pub_key):
                         return False, "Invalid cryptographic signature on account registration"
 
+                is_council = (acc_id == GENESIS_ACCOUNT)
                 self.accounts[acc_id] = {
                     "password_hash": pwd_hash,
                     "salt": salt,
                     "public_key": pub_key,
-                    "balances": {"CSP": 0.0, "BDP": initial_bdp},
+                    "balances": {"CSP": 0.0, "BDP": initial_bdp if is_council else 0.0},
+                    "frozen_balances": {"CSP": 0.0, "BDP": 0.0 if is_council else initial_bdp},
+                    "is_verified": is_council,
+                    "verification_status": "VERIFIED" if is_council else "PENDING",
                     "nonce": 0,
                     "last_active": float(tx.get("timestamp", time.time())),
                     "activity": {
@@ -431,7 +439,8 @@ class BlockchainState:
                         "fees_paid_csp": 0.0, "fees_paid_bdp": 0.0, "score": 0.0
                     }
                 }
-                return True, f"Account '{acc_id}' registered with {initial_bdp} BDP signup bonus"
+                status_msg = "verified council" if is_council else "100 BDP frozen pending student council verification"
+                return True, f"Account '{acc_id}' registered ({status_msg})"
 
             # 3. Client Transactions Require Registered Sender
             if sender not in self.accounts:
@@ -494,6 +503,48 @@ class BlockchainState:
                 tx["fee"] = fee
                 tx["fee_token"] = token
                 return True, f"Transfer executed successfully (Fee: {fee} {token})"
+
+            elif action == "ACCOUNT_VERIFY":
+                # Strict authorization check: Only Student Council account is authorized to verify/reject accounts
+                if sender != GENESIS_ACCOUNT:
+                    return False, f"Unauthorized: sender '{sender}' is not the Student Council authority ({GENESIS_ACCOUNT})"
+                
+                target_account = payload.get("target_account") or payload.get("account_id")
+                decision = (payload.get("decision") or payload.get("status") or "VERIFIED").upper() # "VERIFIED" or "REJECTED"
+                notes = payload.get("notes", "")
+
+                if not target_account or target_account not in self.accounts:
+                    return False, f"Target account '{target_account}' not found on-chain"
+
+                target_acc = self.accounts[target_account]
+                frozen_bdp = float(target_acc.get("frozen_balances", {}).get("BDP", 0.0))
+
+                if decision == "VERIFIED":
+                    target_acc.setdefault("balances", {})
+                    target_acc.setdefault("frozen_balances", {"CSP": 0.0, "BDP": 0.0})
+                    if frozen_bdp > 0:
+                        target_acc["balances"]["BDP"] = round(target_acc["balances"].get("BDP", 0.0) + frozen_bdp, 6)
+                        target_acc["frozen_balances"]["BDP"] = 0.0
+                    target_acc["is_verified"] = True
+                    target_acc["verification_status"] = "VERIFIED"
+                    target_acc["verified_by"] = sender
+                    target_acc["verified_at"] = float(tx.get("timestamp", time.time()))
+                    sender_acc["nonce"] += 1
+                    sender_acc["last_active"] = time.time()
+                    return True, f"Account '{target_account}' successfully verified by Student Council; {frozen_bdp} BDP unlocked!"
+
+                elif decision == "REJECTED":
+                    target_acc.setdefault("frozen_balances", {"CSP": 0.0, "BDP": 0.0})
+                    target_acc["frozen_balances"]["BDP"] = 0.0
+                    target_acc["is_verified"] = False
+                    target_acc["verification_status"] = "REJECTED"
+                    target_acc["rejected_by"] = sender
+                    target_acc["rejected_at"] = float(tx.get("timestamp", time.time()))
+                    sender_acc["nonce"] += 1
+                    sender_acc["last_active"] = time.time()
+                    return True, f"Account '{target_account}' rejected by Student Council; frozen BDP cleared."
+                else:
+                    return False, f"Invalid verification decision '{decision}'. Expected VERIFIED or REJECTED."
 
             elif action == "ORDER_CREATE":
                 order_id = payload.get("order_id") or hash_data(f"{sender}_{time.time()}_{secrets.token_hex(4)}")
@@ -1948,6 +1999,9 @@ class NodeServer:
                         self.send_json(200, {
                             "account_id": acc_id,
                             "balances": acc["balances"],
+                            "frozen_balances": acc.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0}),
+                            "is_verified": acc.get("is_verified", False),
+                            "verification_status": acc.get("verification_status", "PENDING" if float(acc.get("frozen_balances", {}).get("BDP", 0.0)) > 0 else "VERIFIED"),
                             "nonce": effective_nonce,
                             "salt": acc.get("salt"),
                             "public_key": acc.get("public_key"),
@@ -1956,6 +2010,23 @@ class NodeServer:
                             "poa_score": act_data.get("score", 0.0),
                             "activity": act_data
                         })
+
+                elif url == "/accounts":
+                    with node.state.lock:
+                        accounts_list = [
+                            {
+                                "account_id": a_id,
+                                "balances": a_data.get("balances", {}),
+                                "frozen_balances": a_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0}),
+                                "is_verified": a_data.get("is_verified", False),
+                                "verification_status": a_data.get("verification_status", "PENDING" if float(a_data.get("frozen_balances", {}).get("BDP", 0.0)) > 0 else "VERIFIED"),
+                                "nonce": a_data.get("nonce", 0),
+                                "public_key": a_data.get("public_key"),
+                                "last_active": a_data.get("last_active", 0.0)
+                            }
+                            for a_id, a_data in sorted(node.state.accounts.items())
+                        ]
+                    self.send_json(200, {"accounts": accounts_list})
 
                 elif url == "/peers":
                     with node.peer_lock:
@@ -2296,7 +2367,10 @@ class NodeServer:
                         "public_key": pub_hex,
                         "private_key": f"{privkey:064x}",
                         "nonce": 0,
-                        "balances": {"CSP": 0.0, "BDP": DEFAULT_SIGNUP_BDP}
+                        "balances": {"CSP": 0.0, "BDP": 0.0},
+                        "frozen_balances": {"CSP": 0.0, "BDP": DEFAULT_SIGNUP_BDP},
+                        "is_verified": False,
+                        "verification_status": "PENDING"
                     })
 
                 elif url == "/activity/ping":

@@ -8,6 +8,26 @@ import 'package:csii_pay_app/domain/models/transaction_item.dart';
 
 enum AppState { connecting, authRequired, pinRequired, authenticated }
 
+class QuickSwapPreview {
+  final double payAmount;
+  final double receivedAmount;
+  final double averageRate;
+  final double bestRate;
+  final double totalAvailableLiquidity;
+  final int ordersCount;
+  final bool hasSufficientLiquidity;
+
+  const QuickSwapPreview({
+    required this.payAmount,
+    required this.receivedAmount,
+    required this.averageRate,
+    required this.bestRate,
+    required this.totalAvailableLiquidity,
+    required this.ordersCount,
+    required this.hasSufficientLiquidity,
+  });
+}
+
 class WalletViewModel extends ChangeNotifier {
   final WalletRepository _repo;
   Timer? _refreshTimer;
@@ -46,6 +66,12 @@ class WalletViewModel extends ChangeNotifier {
   // Convenience aliases
   String? get accountId => _repo.cachedAccount?.accountId;
   double get cspBalance => _repo.cachedAccount?.balances.csp ?? 0.0;
+  double get bdpBalance => _repo.cachedAccount?.balances.bdp ?? 0.0;
+  double get frozenBdp => _repo.cachedAccount?.frozenBalances.bdp ?? 0.0;
+  double get frozenCsp => _repo.cachedAccount?.frozenBalances.csp ?? 0.0;
+  bool get isVerified => _repo.cachedAccount?.isVerified ?? false;
+  String get verificationStatus =>
+      _repo.cachedAccount?.verificationStatus ?? (_repo.cachedAccount?.isVerified == true ? 'VERIFIED' : 'PENDING');
   NodeApiService get api => _repo.api;
 
   Future<void> loadMyGroups() async {
@@ -381,6 +407,178 @@ class WalletViewModel extends ChangeNotifier {
       return null;
     }
     return r.error ?? 'Failed to cancel order';
+  }
+
+  /// Calculates depth, liquidity, and estimated payout for a quick swap
+  QuickSwapPreview previewQuickSwap({
+    required String buyToken,
+    required double payAmount,
+  }) {
+    final payToken = buyToken == 'BDP' ? 'CSP' : 'BDP';
+    final matching = openOrders.where((o) =>
+        o.offerToken == buyToken &&
+        o.requestToken == payToken &&
+        o.maker != currentAccountId &&
+        o.offerAmount > 0 &&
+        o.requestAmount > 0).toList();
+
+    double totalLiquidity = 0.0;
+    for (final o in matching) {
+      totalLiquidity += o.offerAmount;
+    }
+
+    if (matching.isEmpty) {
+      return QuickSwapPreview(
+        payAmount: payAmount,
+        receivedAmount: 0.0,
+        averageRate: 0.0,
+        bestRate: 0.0,
+        totalAvailableLiquidity: 0.0,
+        ordersCount: 0,
+        hasSufficientLiquidity: false,
+      );
+    }
+
+    // Sort by best price ascending (payToken cost per 1 buyToken)
+    matching.sort((a, b) {
+      final rateA = a.requestAmount / a.offerAmount;
+      final rateB = b.requestAmount / b.offerAmount;
+      return rateA.compareTo(rateB);
+    });
+
+    final bestRate = matching.first.requestAmount / matching.first.offerAmount;
+
+    if (payAmount <= 0) {
+      return QuickSwapPreview(
+        payAmount: 0.0,
+        receivedAmount: 0.0,
+        averageRate: bestRate,
+        bestRate: bestRate,
+        totalAvailableLiquidity: totalLiquidity,
+        ordersCount: matching.length,
+        hasSufficientLiquidity: true,
+      );
+    }
+
+    double remainingPay = payAmount;
+    double totalReceived = 0.0;
+    int ordersUsed = 0;
+
+    for (final order in matching) {
+      if (remainingPay <= 0.000001) break;
+      final orderCost = order.requestAmount;
+      final unitRate = orderCost / order.offerAmount;
+
+      if (remainingPay >= orderCost) {
+        totalReceived += order.offerAmount;
+        remainingPay -= orderCost;
+        ordersUsed++;
+      } else {
+        if (order.allowPartial) {
+          final partialBuy = remainingPay / unitRate;
+          totalReceived += partialBuy;
+          remainingPay = 0;
+          ordersUsed++;
+        }
+      }
+    }
+
+    final double effectivePaid = payAmount - remainingPay;
+    final double avgRate = totalReceived > 0 ? effectivePaid / totalReceived : bestRate;
+    final bool hasSufficient = remainingPay <= 0.0001 && totalReceived > 0;
+
+    return QuickSwapPreview(
+      payAmount: payAmount,
+      receivedAmount: totalReceived,
+      averageRate: avgRate,
+      bestRate: bestRate,
+      totalAvailableLiquidity: totalLiquidity,
+      ordersCount: ordersUsed,
+      hasSufficientLiquidity: hasSufficient,
+    );
+  }
+
+  /// Automatically distributes purchase across matching orders based on orderbook depth
+  Future<String?> quickSwapBuy({
+    required String buyToken,
+    required double payAmount,
+  }) async {
+    if (payAmount <= 0) return 'Please enter a valid amount';
+    final payToken = buyToken == 'BDP' ? 'CSP' : 'BDP';
+
+    final matching = openOrders.where((o) =>
+        o.offerToken == buyToken &&
+        o.requestToken == payToken &&
+        o.maker != currentAccountId &&
+        o.offerAmount > 0 &&
+        o.requestAmount > 0).toList();
+
+    if (matching.isEmpty) {
+      return 'No active sell orders found for $buyToken';
+    }
+
+    // Sort ascending by unit price (payToken / buyToken)
+    matching.sort((a, b) {
+      final rateA = a.requestAmount / a.offerAmount;
+      final rateB = b.requestAmount / b.offerAmount;
+      return rateA.compareTo(rateB);
+    });
+
+    double remainingPay = payAmount;
+    final fills = <Map<String, dynamic>>[];
+
+    for (final order in matching) {
+      if (remainingPay <= 0.000001) break;
+      final orderCost = order.requestAmount;
+      final unitRate = orderCost / order.offerAmount;
+
+      if (remainingPay >= orderCost) {
+        fills.add({
+          'orderId': order.id,
+          'fillAmount': null, // full fill
+          'cost': orderCost,
+        });
+        remainingPay -= orderCost;
+      } else {
+        if (order.allowPartial) {
+          final partialBuy = remainingPay / unitRate;
+          fills.add({
+            'orderId': order.id,
+            'fillAmount': partialBuy,
+            'cost': remainingPay,
+          });
+          remainingPay = 0;
+        }
+      }
+    }
+
+    if (fills.isEmpty) {
+      return 'Insufficient market liquidity to execute order';
+    }
+
+    _setLoading(true);
+    try {
+      for (final fill in fills) {
+        final orderId = fill['orderId'] as String;
+        final fillAmt = fill['fillAmount'] as double?;
+        final r = await _repo.fulfillOrder(orderId, fillAmount: fillAmt);
+        if (!r.success) {
+          _setLoading(false);
+          await _refreshOrders();
+          await _refreshAccount();
+          return r.error ?? 'Swap partially failed';
+        }
+      }
+      _setLoading(false);
+      await _refreshOrders();
+      await _refreshAccount();
+      return null;
+    } catch (e) {
+      _setLoading(false);
+      await _refreshOrders();
+      await _refreshAccount();
+      return e.toString();
+    }
   }
 
   Future<void> logout({bool clearSaved = true}) async {

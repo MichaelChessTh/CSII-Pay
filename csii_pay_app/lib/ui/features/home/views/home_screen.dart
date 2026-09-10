@@ -300,12 +300,72 @@ class _DashboardPageState extends State<_DashboardPage> {
                   ),
                 ),
               ),
-              // Balance cards
+              // Verification Status Banner & Balance cards
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                   child: Column(
                     children: [
+                      if (vm.frozenBdp > 0 || !vm.isVerified)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: vm.isVerified
+                                ? AppColors.success.withValues(alpha: 0.12)
+                                : Colors.orange.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: vm.isVerified
+                                  ? AppColors.success.withValues(alpha: 0.3)
+                                  : Colors.orange.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: vm.isVerified
+                                      ? AppColors.success.withValues(alpha: 0.2)
+                                      : Colors.orange.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  vm.isVerified ? Icons.verified_user_rounded : Icons.lock_clock_rounded,
+                                  color: vm.isVerified ? AppColors.success : Colors.orangeAccent,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      vm.isVerified ? 'Account Verified' : 'Student Verification Pending',
+                                      style: GoogleFonts.outfit(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13,
+                                        color: vm.isVerified ? AppColors.success : Colors.orangeAccent,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      vm.isVerified
+                                          ? 'All BDP points unlocked and fully spendable.'
+                                          : '${vm.frozenBdp.toStringAsFixed(0)} BDP frozen until Student Council validation.',
+                                      style: GoogleFonts.outfit(
+                                        fontSize: 11,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       _BalanceCard(
                         label: 'Layer 1 — Base',
                         token: 'CSP',
@@ -318,6 +378,7 @@ class _DashboardPageState extends State<_DashboardPage> {
                         label: 'Layer 2 — Token',
                         token: 'BDP',
                         balance: account?.balances.bdp ?? 0.0,
+                        frozenBalance: vm.frozenBdp,
                         gradient: AppColors.bdpGradient,
                         icon: Icons.diamond_outlined,
                       ),
@@ -483,6 +544,7 @@ class _BalanceCard extends StatelessWidget {
     required this.label,
     required this.token,
     required this.balance,
+    this.frozenBalance = 0.0,
     required this.gradient,
     required this.icon,
   });
@@ -490,6 +552,7 @@ class _BalanceCard extends StatelessWidget {
   final String label;
   final String token;
   final double balance;
+  final double frozenBalance;
   final LinearGradient gradient;
   final IconData icon;
 
@@ -538,6 +601,32 @@ class _BalanceCard extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
                 ),
+                if (frozenBalance > 0) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.lock_clock_rounded, size: 12, color: Colors.white70),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${frozenBalance.toStringAsFixed(0)} $token Locked (Pending Verification)',
+                          style: GoogleFonts.outfit(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
