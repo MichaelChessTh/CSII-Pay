@@ -303,7 +303,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> with SingleTicker
           children: [
             const Icon(Icons.groups_rounded, color: AppColors.brandCyan, size: 20),
             const SizedBox(width: 8),
-            Text(widget.groupName, style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600)),
+            Expanded(
+              child: Text(
+                widget.groupName,
+                style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
         iconTheme: const IconThemeData(color: Colors.white),

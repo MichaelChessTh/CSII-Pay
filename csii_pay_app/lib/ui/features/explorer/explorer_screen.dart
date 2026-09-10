@@ -148,20 +148,27 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          children: [
-                            const StatusDot(color: AppColors.success, size: 10),
-                            const SizedBox(width: 8),
-                            Text(
-                              'CSII-Pay Network Live',
-                              style: GoogleFonts.outfit(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 16,
-                                color: AppColors.textPrimary,
+                        Expanded(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const StatusDot(color: AppColors.success, size: 10),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  'CSII-Pay Network Live',
+                                  style: GoogleFonts.outfit(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
+                        const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
@@ -205,13 +212,18 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Node Operator: ${node?.operatorAccount ?? "None"}',
-                          style: GoogleFonts.outfit(
-                            fontSize: 12,
-                            color: AppColors.textSecondary,
+                        Expanded(
+                          child: Text(
+                            'Node Operator: ${node?.operatorAccount ?? "None"}',
+                            style: GoogleFonts.outfit(
+                              fontSize: 12,
+                              color: AppColors.textSecondary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Text(
                           '${node?.activeUsersCount ?? 0} Active Miners',
                           style: GoogleFonts.outfit(
@@ -317,12 +329,15 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
             children: [
               const Icon(Icons.person_search_rounded, color: AppColors.brandCyan, size: 22),
               const SizedBox(width: 8),
-              Text(
-                'Lookup Account Balance & Identity',
-                style: GoogleFonts.outfit(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+              Expanded(
+                child: Text(
+                  'Lookup Account Balance & Identity',
+                  style: GoogleFonts.outfit(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -564,9 +579,13 @@ class _StatItem extends StatelessWidget {
             children: [
               Icon(icon, size: 14, color: AppColors.textMuted),
               const SizedBox(width: 4),
-              Text(
-                label,
-                style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                ),
               ),
             ],
           ),
@@ -674,12 +693,16 @@ class _BlockCard extends StatelessWidget {
                     'Validator: ',
                     style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
                   ),
-                  Text(
-                    block.validator.isNotEmpty ? block.validator : 'Genesis / System',
-                    style: GoogleFonts.outfit(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+                  Expanded(
+                    child: Text(
+                      block.validator.isNotEmpty ? block.validator : 'Genesis / System',
+                      style: GoogleFonts.outfit(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -801,11 +824,17 @@ class _BlockDetailSheet extends StatelessWidget {
                               fontSize: 12,
                             ),
                           ),
-                          Text(
-                            'from @$sender',
-                            style: GoogleFonts.outfit(
-                              fontSize: 11,
-                              color: AppColors.textSecondary,
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'from @$sender',
+                              textAlign: TextAlign.right,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.outfit(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                              ),
                             ),
                           ),
                         ],

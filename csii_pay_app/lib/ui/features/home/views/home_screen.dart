@@ -802,16 +802,20 @@ class _TransactionTile extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 5),
-                        Text(
-                          isPending ? 'Pending' : (tx.blockIndex != null ? 'Block #${tx.blockIndex}' : 'Confirmed'),
-                          style: GoogleFonts.outfit(
-                            color: AppColors.textSecondary,
-                            fontSize: 11,
+                        Flexible(
+                          child: Text(
+                            isPending ? 'Pending' : (tx.blockIndex != null ? 'Block #${tx.blockIndex}' : 'Confirmed'),
+                            style: GoogleFonts.outfit(
+                              color: AppColors.textSecondary,
+                              fontSize: 11,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Text(
-                          fmt.format(tx.dateTime),
+                          '• ${fmt.format(tx.dateTime)}',
                           style: GoogleFonts.outfit(
                             color: AppColors.textMuted,
                             fontSize: 11,

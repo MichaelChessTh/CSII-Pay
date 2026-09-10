@@ -433,44 +433,51 @@ class _SendScreenState extends State<SendScreen> {
                             color: AppColors.textSecondary,
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: (_selectedToken == 'CSP'
-                                    ? AppColors.cspColor
-                                    : AppColors.bdpColor)
-                                .withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
                               color: (_selectedToken == 'CSP'
                                       ? AppColors.cspColor
                                       : AppColors.bdpColor)
-                                  .withValues(alpha: 0.3),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.account_balance_wallet_outlined,
-                                size: 12,
-                                color: _selectedToken == 'CSP'
-                                    ? AppColors.cspColor
-                                    : AppColors.bdpColor,
+                                  .withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: (_selectedToken == 'CSP'
+                                        ? AppColors.cspColor
+                                        : AppColors.bdpColor)
+                                    .withValues(alpha: 0.3),
                               ),
-                              const SizedBox(width: 5),
-                              Text(
-                                'Balance: ${currentBalance.toStringAsFixed(2)} $_selectedToken',
-                                style: GoogleFonts.outfit(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.account_balance_wallet_outlined,
+                                  size: 12,
                                   color: _selectedToken == 'CSP'
                                       ? AppColors.cspColor
                                       : AppColors.bdpColor,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 5),
+                                Flexible(
+                                  child: Text(
+                                    'Balance: ${currentBalance.toStringAsFixed(2)} $_selectedToken',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: _selectedToken == 'CSP'
+                                          ? AppColors.cspColor
+                                          : AppColors.bdpColor,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -648,6 +655,8 @@ class _SendScreenState extends State<SendScreen> {
                             const SizedBox(height: 10),
                             Text(
                               _recipientTeamInfo!['name']?.toString() ?? _recipientCtrl.text.trim(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.outfit(
                                 color: AppColors.textPrimary,
                                 fontSize: 16,
@@ -728,6 +737,8 @@ class _SendScreenState extends State<SendScreen> {
                                   ),
                                   Text(
                                     '@${_recipientCtrl.text.trim()} • Verified Student',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.outfit(
                                       color: AppColors.brandTeal,
                                       fontSize: 11,
@@ -933,7 +944,7 @@ class _SendScreenState extends State<SendScreen> {
         ),
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.paddingOf(ctx).bottom + 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1047,22 +1058,32 @@ class _SendScreenState extends State<SendScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Team Members (${memberIds.length})',
-                      style: GoogleFonts.outfit(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textSecondary,
+                    Flexible(
+                      child: Text(
+                        'Team Members (${memberIds.length})',
+                        style: GoogleFonts.outfit(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (creator.isNotEmpty)
-                      Text(
-                        'Lead: @$creator',
-                        style: GoogleFonts.outfit(
-                          fontSize: 11,
-                          color: AppColors.textMuted,
+                    if (creator.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Lead: @$creator',
+                          style: GoogleFonts.outfit(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -1197,18 +1218,20 @@ class _SendScreenState extends State<SendScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.85,
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: EdgeInsets.only(
-              left: 24,
-              right: 24,
-              top: 20,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
-            ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+          ),
+          child: SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                20,
+                24,
+                MediaQuery.paddingOf(ctx).bottom + 24,
+              ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1386,8 +1409,9 @@ class _SendScreenState extends State<SendScreen> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _TokenSelector extends StatelessWidget {
@@ -1447,19 +1471,28 @@ class _FeeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: GoogleFonts.outfit(fontSize: 13, color: AppColors.textSecondary)),
-        Text(
-          value,
-          style: GoogleFonts.outfit(
-            fontSize: 13,
-            fontWeight: highlight ? FontWeight.w600 : FontWeight.w400,
-            color: highlight ? AppColors.brandTeal : AppColors.textSecondary,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: GoogleFonts.outfit(fontSize: 13, color: AppColors.textSecondary)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.outfit(
+                fontSize: 13,
+                fontWeight: highlight ? FontWeight.w600 : FontWeight.w400,
+                color: highlight ? AppColors.brandTeal : AppColors.textSecondary,
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -1475,15 +1508,22 @@ class _ConfirmRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: GoogleFonts.outfit(fontSize: 14, color: AppColors.textSecondary)),
-          Text(
-            value,
-            style: GoogleFonts.outfit(
-              fontSize: 14,
-              fontWeight: highlight ? FontWeight.w700 : FontWeight.w500,
-              color: highlight ? AppColors.brandTeal : AppColors.textPrimary,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.outfit(
+                fontSize: 14,
+                fontWeight: highlight ? FontWeight.w700 : FontWeight.w500,
+                color: highlight ? AppColors.brandTeal : AppColors.textPrimary,
+              ),
             ),
           ),
         ],

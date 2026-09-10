@@ -1323,31 +1323,34 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
             ? (vm.account?.balances.csp ?? 0.0)
             : (vm.account?.balances.bdp ?? 0.0));
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
-      ),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.bgSurface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    final padding = MediaQuery.of(context).padding;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsets.bottom),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.9,
         ),
-        padding: EdgeInsets.fromLTRB(
-          20,
-          20,
-          20,
-          MediaQuery.of(context).viewInsets.bottom +
-              MediaQuery.paddingOf(context).bottom +
-              24,
-        ),
-        child: SafeArea(
-          top: false,
-          bottom: true,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
+        child: Container(
+          decoration: const BoxDecoration(
+            color: AppColors.bgSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SafeArea(
+            top: false,
+            bottom: true,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                padding.bottom + 24,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
             Center(
               child: Container(
                 width: 40,
@@ -1629,8 +1632,9 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
       ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1727,31 +1731,34 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
     final vm = context.watch<WalletViewModel>();
     final isMine = job.creatorAccountId == vm.currentAccountId;
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.88,
-      ),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.bgSurface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    final padding = MediaQuery.of(context).padding;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsets.bottom),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.88,
         ),
-        padding: EdgeInsets.fromLTRB(
-          20,
-          20,
-          20,
-          MediaQuery.of(context).viewInsets.bottom +
-              MediaQuery.paddingOf(context).bottom +
-              24,
-        ),
-        child: SafeArea(
-          top: false,
-          bottom: true,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
+        child: Container(
+          decoration: const BoxDecoration(
+            color: AppColors.bgSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SafeArea(
+            top: false,
+            bottom: true,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                20,
+                20,
+                padding.bottom + 24,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
             Center(
               child: Container(
                 width: 40,
@@ -1796,8 +1803,11 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
             ),
             const SizedBox(height: 8),
 
-            // Metadata row
-            Row(
+            // Metadata chips wrap
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -1814,7 +1824,6 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
                 Builder(
                   builder: (_) {
                     final isTeam = job.type == 'team application' ||
@@ -1852,15 +1861,27 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
                     );
                   },
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  'Difficulty: ${job.difficulty}/5',
-                  style: GoogleFonts.outfit(fontSize: 12, color: AppColors.brandGold),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.brandGold.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'Difficulty: ${job.difficulty}/5',
+                    style: GoogleFonts.outfit(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.brandGold),
+                  ),
                 ),
-                const Spacer(),
-                Text(
-                  'Due: ${job.deadline.isNotEmpty ? job.deadline : "Flexible"}',
-                  style: GoogleFonts.outfit(fontSize: 12, color: AppColors.textMuted),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'Due: ${job.deadline.isNotEmpty ? job.deadline : "Flexible"}',
+                    style: GoogleFonts.outfit(fontSize: 10, color: AppColors.textSecondary),
+                  ),
                 ),
               ],
             ),
@@ -2126,6 +2147,7 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
       ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
