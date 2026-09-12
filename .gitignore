@@ -30,3 +30,11 @@ Thumbs.db
 
 # Temp / Scratch
 scratch/
+
+# Secrets (see SECURITY_SETUP.md)
+.env
+.env.*
+!.env.example
+node_*_auth.db*
+test_env/
+test_run_data/

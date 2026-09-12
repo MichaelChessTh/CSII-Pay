@@ -75,7 +75,9 @@ class _PinUnlockScreenState extends State<PinUnlockScreen>
       setState(() {
         _isUnlocking = false;
         _enteredPin = '';
-        _error = 'Incorrect PIN. Please try again.';
+        _error = vm.pinAttemptsRemaining > 0
+            ? 'Incorrect PIN. ${vm.pinAttemptsRemaining} attempt${vm.pinAttemptsRemaining == 1 ? '' : 's'} left.'
+            : 'Too many attempts. Please sign in with your password.';
       });
     }
   }

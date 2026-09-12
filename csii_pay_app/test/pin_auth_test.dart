@@ -12,16 +12,18 @@ void main() {
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('account_id', 'alice');
-    await prefs.setString('saved_password', 'secret123');
+    await prefs.setString('refresh_token', 'rt.example.token');
+    await prefs.setString('saved_password', 'legacy-plaintext');
 
     expect(await WalletRepository.hasSavedCredentials(), isTrue);
     expect(await WalletRepository.getSavedAccountId(), 'alice');
-    expect(await WalletRepository.getSavedPassword(), 'secret123');
+    expect(await WalletRepository.getSavedRefreshToken(), 'rt.example.token');
 
     await WalletRepository.clearSavedCredentials();
     expect(await WalletRepository.hasSavedCredentials(), isFalse);
     expect(await WalletRepository.getSavedAccountId(), isNull);
-    expect(await WalletRepository.getSavedPassword(), isNull);
+    expect(await WalletRepository.getSavedRefreshToken(), isNull);
+    expect(prefs.getString('saved_password'), isNull, reason: 'legacy plaintext password must be purged');
   });
 
   test('WalletRepository PIN management', () async {
@@ -35,5 +37,14 @@ void main() {
     await WalletRepository.removeAppPin();
     expect(await WalletRepository.hasAppPin(), isFalse);
     expect(await WalletRepository.getAppPin(), isNull);
+  });
+
+  test('PIN failure counter counts down to a wipe', () async {
+    for (var expected = WalletRepository.maxPinAttempts - 1; expected >= 1; expected--) {
+      expect(await WalletRepository.recordPinFailure(), expected);
+    }
+    expect(await WalletRepository.recordPinFailure(), 0);
+    await WalletRepository.resetPinFailures();
+    expect(await WalletRepository.recordPinFailure(), WalletRepository.maxPinAttempts - 1);
   });
 }

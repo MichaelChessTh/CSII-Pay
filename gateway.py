@@ -9,10 +9,20 @@ import urllib.error
 import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+from auth import load_dotenv
+
 DEFAULT_CANDIDATE_PORTS = [8000, 8001, 8002, 8003]
 GATEWAY_PORT = 8080
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+# Browser origins allowed to call the API. Empty = any origin (development only).
+ALLOWED_ORIGINS = {o.strip() for o in os.environ.get("CSII_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+# Only claim HTTPS to the nodes when a TLS terminator (e.g. Cloudflare Tunnel) really sits in front.
+TLS_TERMINATED = os.environ.get("CSII_GATEWAY_TLS_TERMINATED", "0") == "1"
+# Client-supplied forwarding headers are never trusted; the gateway sets its own.
+HOP_BY_HOP_OR_SPOOFABLE = ("host", "content-length", "forwarded", "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-real-ip")
 WEB_DIR = os.path.join(BASE_DIR, "csii_pay_app", "build", "web")
 mimetypes.init()
 mimetypes.add_type("application/javascript", ".js")
@@ -48,6 +58,7 @@ API_ENDPOINTS = (
     "/tx",
     "/contracts",
     "/contract",
+    "/auth",
 )
 
 class NodeRegistry:
@@ -105,10 +116,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
         pass
 
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        origin = self.headers.get("Origin")
+        if not origin:
+            return
+        if not ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        elif origin in ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        else:
+            return
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Expose-Headers", "X-Routed-Node, X-Gateway")
+        self.send_header("Access-Control-Max-Age", "600")
 
     def _is_api_path(self, path):
         clean = path.split("?")[0]
@@ -239,10 +260,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
         # Build forward request
         req = urllib.request.Request(target_url, data=body, method=method)
         for h, v in self.headers.items():
-            if h.lower() not in ("host", "content-length"):
+            if h.lower() not in HOP_BY_HOP_OR_SPOOFABLE:
                 req.add_header(h, v)
         req.add_header("X-Forwarded-For", self.client_address[0])
-        req.add_header("X-Forwarded-Proto", "https")
+        req.add_header("X-Forwarded-Proto", "https" if TLS_TERMINATED else "http")
         req.add_header("User-Agent", self.headers.get("User-Agent", "CSII-Pay-Gateway"))
 
         try:
@@ -250,7 +271,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 resp_body = resp.read()
                 self.send_response(resp.status)
                 for h, v in resp.headers.items():
-                    if h.lower() not in ("transfer-encoding", "content-length", "access-control-allow-origin"):
+                    if h.lower() not in ("transfer-encoding", "content-length") and not h.lower().startswith("access-control-"):
                         self.send_header(h, v)
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.send_header("X-Routed-Node", str(target_port))
@@ -263,7 +284,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             err_body = e.read()
             self.send_response(e.code)
             for h, v in e.headers.items():
-                if h.lower() not in ("transfer-encoding", "content-length", "access-control-allow-origin"):
+                if h.lower() not in ("transfer-encoding", "content-length") and not h.lower().startswith("access-control-"):
                     self.send_header(h, v)
             self.send_header("Content-Length", str(len(err_body)))
             self.send_header("X-Routed-Node", str(target_port))
@@ -292,6 +313,10 @@ def run_gateway(port=GATEWAY_PORT, candidate_ports=None):
     time.sleep(1.0)
     print(f"=== CSII-Pay Gateway starting on http://127.0.0.1:{port} ===")
     print(f"Candidate ports: {candidate_ports}")
+    if not ALLOWED_ORIGINS:
+        print("[!] WARNING: CSII_ALLOWED_ORIGINS is not set; CORS allows any origin.")
+    if not TLS_TERMINATED:
+        print("[!] Gateway is serving plain HTTP. Put it behind TLS before exposing it (CSII_GATEWAY_TLS_TERMINATED=1 once done).")
     print(f"Initial healthy nodes: {registry.get_all_healthy()}")
 
     GatewayHandler.registry = registry

@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
 # Copy node source files and storage
-COPY node.py storage.py contracts.py council_portal.py ./
+COPY node.py storage.py contracts.py council_portal.py auth.py ./
 COPY node_*_chain.json ./
 
 EXPOSE 8000

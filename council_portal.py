@@ -3,7 +3,7 @@
 CSII-Pay Student Council Verification Portal
 Zero-dependency HTTP Web Application running on port 5050.
 
-Authorizes Student Council (ID: 6958082456, Password: 123) to review
+Authorizes the Student Council account (6958082456; password from CSII_GENESIS_PASSWORD) to review
 registered accounts in Firebase Firestore and execute on-chain
 ACCOUNT_VERIFY transactions to unlock the 100 BDP bonus.
 """
@@ -14,6 +14,7 @@ import json
 import time
 import secrets
 import hashlib
+import hmac
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -31,11 +32,24 @@ from node import (
     sign_transaction_payload,
     hash_data
 )
+from auth import RateLimiter, audit
 
 NODE_URL = os.environ.get("NODE_URL", "http://127.0.0.1:8000")
 FIRESTORE_USERS_URL = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/users"
-SECRET_SESSION_TOKEN = secrets.token_hex(24)
-ACTIVE_SESSIONS = set()
+# Session store: token -> {"csrf": str, "created": float, "last_seen": float}
+ACTIVE_SESSIONS = {}
+SESSION_IDLE_SECONDS = 30 * 60
+SESSION_MAX_SECONDS = 8 * 3600
+# Cookies are Secure by default; opt out only for plain-HTTP local testing.
+SECURE_COOKIE = os.environ.get("COUNCIL_INSECURE_COOKIE", "0") != "1"
+LOGIN_LIMITER = RateLimiter()
+
+
+def _cookie_flags():
+    flags = "Path=/; HttpOnly; SameSite=Strict"
+    if SECURE_COOKIE:
+        flags += "; Secure"
+    return flags
 
 def _get_ssl_context():
     try:
@@ -320,7 +334,7 @@ def render_login_page(error=None):
 </body>
 </html>"""
 
-def render_dashboard_page(students, pending_count, verified_count, total_count, current_filter='all', query='', message=None):
+def render_dashboard_page(students, pending_count, verified_count, total_count, current_filter='all', query='', message=None, csrf_token=''):
     msg_html = f'<div class="toast-msg">✨ {message}</div>' if message else ''
     
     rows_html = ""
@@ -333,12 +347,14 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
             
             action_btn = f'''
             <form method="POST" action="/verify" style="display:inline-block; margin-right: 6px;">
+              <input type="hidden" name="csrf_token" value="{csrf_token}">
               <input type="hidden" name="account_id" value="{s['account_id']}">
               <input type="hidden" name="doc_id" value="{s['doc_id']}">
               <input type="hidden" name="decision" value="VERIFIED">
               <button type="submit" class="action-btn verify-btn">✓ Approve & Unlock BDP</button>
             </form>
             <form method="POST" action="/verify" style="display:inline-block;">
+              <input type="hidden" name="csrf_token" value="{csrf_token}">
               <input type="hidden" name="account_id" value="{s['account_id']}">
               <input type="hidden" name="doc_id" value="{s['doc_id']}">
               <input type="hidden" name="decision" value="REJECTED">
@@ -707,20 +723,34 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
 
 
 class CouncilPortalHandler(BaseHTTPRequestHandler):
-    def _get_cookie_session(self):
+    def _session_token(self):
         cookie_header = self.headers.get("Cookie")
         if not cookie_header:
             return None
         cookie = SimpleCookie(cookie_header)
-        if "council_session" in cookie:
-            token = cookie["council_session"].value
-            if token in ACTIVE_SESSIONS:
-                return GENESIS_ACCOUNT
-        return None
+        if "council_session" not in cookie:
+            return None
+        return cookie["council_session"].value
+
+    def _get_cookie_session(self):
+        token = self._session_token()
+        record = ACTIVE_SESSIONS.get(token) if token else None
+        if not record:
+            return None
+        now = time.time()
+        if now - record["last_seen"] > SESSION_IDLE_SECONDS or now - record["created"] > SESSION_MAX_SECONDS:
+            ACTIVE_SESSIONS.pop(token, None)
+            return None
+        record["last_seen"] = now
+        return GENESIS_ACCOUNT
+
+    def _csrf_token(self):
+        record = ACTIVE_SESSIONS.get(self._session_token() or "")
+        return record["csrf"] if record else ""
 
     def _set_cookie_and_redirect(self, token, path="/"):
         self.send_response(302)
-        self.send_header("Set-Cookie", f"council_session={token}; Path=/; HttpOnly")
+        self.send_header("Set-Cookie", f"council_session={token}; {_cookie_flags()}; Max-Age={SESSION_MAX_SECONDS}")
         self.send_header("Location", path)
         self.end_headers()
 
@@ -737,13 +767,11 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
         session_user = self._get_cookie_session()
 
         if path == "/logout":
-            cookie_header = self.headers.get("Cookie")
-            if cookie_header:
-                cookie = SimpleCookie(cookie_header)
-                if "council_session" in cookie:
-                    ACTIVE_SESSIONS.discard(cookie["council_session"].value)
+            token = self._session_token()
+            if token:
+                ACTIVE_SESSIONS.pop(token, None)
             self.send_response(302)
-            self.send_header("Set-Cookie", "council_session=; Path=/; Max-Age=0")
+            self.send_header("Set-Cookie", f"council_session=; {_cookie_flags()}; Max-Age=0")
             self.send_header("Location", "/login")
             self.end_headers()
             return
@@ -869,7 +897,8 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
             total_count=total_count,
             current_filter=current_filter,
             query=query,
-            message=msg
+            message=msg,
+            csrf_token=self._csrf_token()
         )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -886,13 +915,29 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
         if path == "/login":
             account_id = form.get("account_id", [""])[0].strip()
             password = form.get("password", [""])[0].strip()
+            client_ip = self.client_address[0]
 
-            if account_id == GENESIS_ACCOUNT and password == GENESIS_PASSWORD:
-                token = secrets.token_hex(24)
-                ACTIVE_SESSIONS.add(token)
+            if not LOGIN_LIMITER.allow(f"council-login:{client_ip}", capacity=10, refill_per_sec=0.1):
+                audit("council.login_rate_limited", ip=client_ip)
+                html = render_login_page(error="Too many attempts. Try again in a few minutes.")
+                self.send_response(429)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html.encode("utf-8"))
+                return
+
+            expected = (GENESIS_PASSWORD or "").encode("utf-8")
+            id_ok = hmac.compare_digest(account_id.encode("utf-8"), GENESIS_ACCOUNT.encode("utf-8"))
+            pwd_ok = bool(expected) and hmac.compare_digest(password.encode("utf-8"), expected)
+            if id_ok and pwd_ok:
+                token = secrets.token_urlsafe(32)
+                now = time.time()
+                ACTIVE_SESSIONS[token] = {"csrf": secrets.token_urlsafe(32), "created": now, "last_seen": now}
+                audit("council.login_ok", ip=client_ip)
                 self._set_cookie_and_redirect(token, "/")
             else:
-                html = render_login_page(error="Invalid Faculty credentials. Authorized Faculty ID: 6958082456")
+                audit("council.login_failed", ip=client_ip)
+                html = render_login_page(error="Invalid credentials.")
                 self.send_response(401)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
@@ -906,9 +951,21 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/verify":
+            submitted_csrf = form.get("csrf_token", [""])[0]
+            expected_csrf = self._csrf_token()
+            if not expected_csrf or not hmac.compare_digest(submitted_csrf, expected_csrf):
+                audit("council.csrf_rejected", ip=self.client_address[0])
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"Invalid or missing CSRF token. Reload the dashboard and try again.")
+                return
             account_id = form.get("account_id", [""])[0].strip()
             doc_id = form.get("doc_id", [""])[0].strip()
             decision = form.get("decision", ["VERIFIED"])[0].upper()
+            if decision not in ("VERIFIED", "REJECTED"):
+                self._redirect("/?msg=" + urllib.parse.quote("Error: Invalid decision"))
+                return
 
             if not account_id:
                 self._redirect("/?msg=" + urllib.parse.quote("Error: Missing account ID"))
@@ -930,6 +987,10 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def run_server(port=5050):
+    if not GENESIS_PASSWORD:
+        print("[!] CSII_GENESIS_PASSWORD is not set; council login is disabled. See SECURITY_SETUP.md.")
+    if not SECURE_COOKIE:
+        print("[!] COUNCIL_INSECURE_COOKIE=1: session cookie is sent without the Secure flag (local testing only).")
     server = ThreadingHTTPServer(("0.0.0.0", port), CouncilPortalHandler)
     print(f"[*] BAScii Faculty Verification Portal listening on http://127.0.0.1:{port}...")
     server.serve_forever()

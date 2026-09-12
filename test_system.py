@@ -37,6 +37,11 @@ import time
 import urllib.request
 import urllib.error
 
+# Deployment secrets are mandatory; the test suite provides throwaway values for the
+# nodes it spawns (child processes inherit the environment).
+os.environ.setdefault("CSII_GENESIS_PASSWORD", "test-genesis-secret-not-for-production")
+os.environ.setdefault("CSII_JWT_SECRET", "test-jwt-secret-0123456789abcdef0123456789abcdef")
+
 from node import (
     GENESIS_ACCOUNT,
     GENESIS_PASSWORD,
@@ -46,7 +51,21 @@ from node import (
     hash_data
 )
 
-TEST_DIR = "/Users/chess/StudioProjects/CSII-Pay/test_env"
+TEST_DIR = os.environ.get("CSII_TEST_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_env"))
+
+def wait_for_status(url: str, timeout: float = 40.0) -> None:
+    """Poll a node's /status until it answers; startup time depends on network probes and cloud sync."""
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            if urllib.request.urlopen(f"{url}/status", timeout=3).status == 200:
+                return
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        time.sleep(0.5)
+    raise RuntimeError(f"Node at {url} did not come up within {timeout}s: {last_err}")
+
 
 def get_account_info(node_url: str, account_id: str) -> dict:
     req = urllib.request.Request(f"{node_url}/account/{account_id}", headers={"User-Agent": "CSII-Pay-Test"})
@@ -121,13 +140,13 @@ def run_test():
         node1_proc = subprocess.Popen([
             sys.executable, "node.py",
             "--account", "6958082456",
-            "--password", "123",
+            "--password", GENESIS_PASSWORD,
             "--port", "8000",
             "--udp-port", "50556",
             "--data-dir", TEST_DIR
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        time.sleep(2.5)
+        wait_for_status("http://127.0.0.1:8000")
 
         resp = urllib.request.urlopen("http://127.0.0.1:8000/status", timeout=3)
         status_data = json.loads(resp.read().decode("utf-8"))
@@ -355,7 +374,7 @@ def run_test():
             "--data-dir", TEST_DIR
         ])
 
-        time.sleep(3.5)
+        wait_for_status("http://127.0.0.1:8001")
 
         # Check Node 2 on auto-selected port 8001
         resp2 = urllib.request.urlopen("http://127.0.0.1:8001/status", timeout=3)
@@ -430,7 +449,7 @@ def run_test():
             sys.executable, "-u", "node.py",
             "--port", "8000",
             "--account", GENESIS_ACCOUNT,
-            "--password", "123",
+            "--password", GENESIS_PASSWORD,
             "--udp-port", "50555",
             "--peer", "http://127.0.0.1:8001",
             "--data-dir", TEST_DIR

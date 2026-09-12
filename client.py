@@ -129,6 +129,7 @@ class CryptoClient:
         self.pubkey = None
         self.salt = None
         self.token = None
+        self.refresh_token = None
         self.balances = {"CSP": 0.0, "BDP": 0.0}
         self.nonce = 0
         self.activity = {}
@@ -136,23 +137,46 @@ class CryptoClient:
         self.poa_thread = None
         self.poa_score = 0
 
-    def api_request(self, endpoint: str, method: str = "GET", data: dict = None) -> tuple[bool, dict]:
+    def _raw_request(self, endpoint: str, method: str = "GET", data: dict = None) -> tuple[bool, dict, int]:
         url = f"{self.node_url}{endpoint}"
         req_data = json.dumps(data).encode("utf-8") if data else None
         headers = {"Content-Type": "application/json", "User-Agent": "CSII-Pay-Client"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 res_body = resp.read().decode("utf-8")
-                return True, json.loads(res_body)
+                return True, json.loads(res_body), resp.status
         except urllib.error.HTTPError as e:
             try:
                 err_json = json.loads(e.read().decode("utf-8"))
-                return False, err_json
+                return False, err_json, e.code
             except Exception:
-                return False, {"error": f"HTTP {e.code}: {e.reason}"}
+                return False, {"error": f"HTTP {e.code}: {e.reason}"}, e.code
         except Exception as e:
-            return False, {"error": str(e)}
+            return False, {"error": str(e)}, 0
+
+    def _refresh_session(self) -> bool:
+        """Exchange the refresh token for a new access/refresh pair."""
+        if not self.refresh_token:
+            return False
+        saved_token, self.token = self.token, None
+        ok, res, _ = self._raw_request("/auth/refresh", method="POST", data={"refresh_token": self.refresh_token})
+        if ok and res.get("access_token"):
+            self.token = res["access_token"]
+            self.refresh_token = res.get("refresh_token", self.refresh_token)
+            return True
+        self.token = saved_token
+        return False
+
+    def api_request(self, endpoint: str, method: str = "GET", data: dict = None) -> tuple[bool, dict]:
+        ok, res, status = self._raw_request(endpoint, method, data)
+        # Access tokens last 15 minutes; transparently refresh once on 401.
+        if not ok and status == 401 and not endpoint.startswith("/auth/") and endpoint not in ("/login", "/register"):
+            if self._refresh_session():
+                ok, res, status = self._raw_request(endpoint, method, data)
+        return ok, res
 
     def check_node_connection(self) -> tuple[bool, dict]:
         return self.api_request("/status")
@@ -162,7 +186,8 @@ class CryptoClient:
         if ok and res.get("success"):
             self.account_id = account_id
             self.password = password
-            self.token = res.get("token")
+            self.token = res.get("access_token") or res.get("token")
+            self.refresh_token = res.get("refresh_token")
             self.balances = res.get("balances", {"CSP": 0.0, "BDP": 0.0})
             self.nonce = res.get("nonce", 0)
             self.salt = res.get("salt")
@@ -180,7 +205,8 @@ class CryptoClient:
         if ok and res.get("success"):
             self.account_id = account_id
             self.password = password
-            self.token = res.get("token")
+            self.token = res.get("access_token") or res.get("token")
+            self.refresh_token = res.get("refresh_token")
             self.balances = res.get("balances", {"CSP": 0.0, "BDP": 0.0})
             self.nonce = res.get("nonce", 0)
             self.salt = res.get("salt")
@@ -215,8 +241,7 @@ class CryptoClient:
             while self.poa_mining:
                 if self.account_id and self.token:
                     ok, res = self.api_request("/activity/ping", method="POST", data={
-                        "account_id": self.account_id,
-                        "token": self.token
+                        "account_id": self.account_id
                     })
                     if ok:
                         self.poa_score = res.get("proof", {}).get("score", self.poa_score)
@@ -244,10 +269,9 @@ class CryptoClient:
             "timestamp": time.time(),
             "signature": ""
         }
-        if self.privkey:
-            tx["signature"] = sign_transaction_payload(tx, self.privkey)
-        else:
-            tx["signature"] = f"SIG_{self.token[:8] if self.token else 'DIRECT'}"
+        if not self.privkey:
+            return False, "Private key unavailable: sign in again to derive it locally"
+        tx["signature"] = sign_transaction_payload(tx, self.privkey)
 
         ok, res = self.api_request("/tx/submit", method="POST", data=tx)
         if ok and res.get("success"):
@@ -284,10 +308,9 @@ class CryptoClient:
             "timestamp": time.time(),
             "signature": ""
         }
-        if self.privkey:
-            tx["signature"] = sign_transaction_payload(tx, self.privkey)
-        else:
-            tx["signature"] = f"SIG_{self.token[:8] if self.token else 'DIRECT'}"
+        if not self.privkey:
+            return False, "Private key unavailable: sign in again to derive it locally"
+        tx["signature"] = sign_transaction_payload(tx, self.privkey)
 
         ok, res = self.api_request("/tx/submit", method="POST", data=tx)
         if ok and res.get("success"):
@@ -312,10 +335,9 @@ class CryptoClient:
             "timestamp": time.time(),
             "signature": ""
         }
-        if self.privkey:
-            tx["signature"] = sign_transaction_payload(tx, self.privkey)
-        else:
-            tx["signature"] = f"SIG_{self.token[:8] if self.token else 'DIRECT'}"
+        if not self.privkey:
+            return False, "Private key unavailable: sign in again to derive it locally"
+        tx["signature"] = sign_transaction_payload(tx, self.privkey)
 
         ok, res = self.api_request("/tx/submit", method="POST", data=tx)
         if ok and res.get("success"):
@@ -347,10 +369,9 @@ class CryptoClient:
             "timestamp": time.time(),
             "signature": ""
         }
-        if self.privkey:
-            tx["signature"] = sign_transaction_payload(tx, self.privkey)
-        else:
-            tx["signature"] = f"SIG_{self.token[:8] if self.token else 'DIRECT'}"
+        if not self.privkey:
+            return False, "Private key unavailable: sign in again to derive it locally"
+        tx["signature"] = sign_transaction_payload(tx, self.privkey)
 
         ok, res = self.api_request("/tx/submit", method="POST", data=tx)
         if ok and res.get("success"):

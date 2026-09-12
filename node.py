@@ -23,6 +23,7 @@ import json
 import math
 import os
 import random
+import re
 import secrets
 import socket
 import sys
@@ -34,14 +35,46 @@ import urllib.request
 
 from storage import BlockchainStorage
 from contracts import SmartContractEngine, ContractContext
+from auth import (
+    AuthError, LoginThrottle, RateLimiter, TokenService,
+    audit, load_dotenv, parse_bearer, require_secret,
+)
+
+# Secrets are read from the environment or a .env file next to this script.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Default Configuration
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_UDP_PORT = 50555
 DEFAULT_BLOCK_TIME = 8.0  # seconds between PoA rounds when active
 GENESIS_ACCOUNT = "6958082456"
-GENESIS_PASSWORD = "123"
+# Council password. Never a literal in source: see SECURITY_SETUP.md.
+GENESIS_PASSWORD = os.environ.get("CSII_GENESIS_PASSWORD") or None
+JWT_SECRET = os.environ.get("CSII_JWT_SECRET") or None
 GENESIS_SALT = "csii_pay_genesis_salt_v1"
+
+# CORS allowlist. Empty means "any origin" for local development (a warning is printed at startup).
+ALLOWED_ORIGINS = {o.strip() for o in os.environ.get("CSII_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+MAX_BODY_BYTES = 1_000_000
+ACCOUNT_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{3,32}")
+MIN_PASSWORD_LENGTH = 8
+
+# Signatures that mark transactions produced by consensus itself, never by a client.
+SYSTEM_SIGNATURES = frozenset({"SIG_GENESIS", "GENESIS_SIGNATURE", "POA_SYSTEM_REWARD", "SYSTEM_LOTTERY_REWARD"})
+SYSTEM_ACTIONS = frozenset({"POA_REWARD", "ACTIVITY_REWARD", "ACTIVITY_LOTTERY"})
+
+
+def is_node_internal_signature(sig) -> bool:
+    """Placeholder signature on transactions the node builds for a caller it has already authenticated."""
+    return isinstance(sig, str) and sig.startswith("DIRECT")
+
+
+def require_runtime_secrets():
+    """Fail fast with setup guidance when the deployment secrets are missing."""
+    global GENESIS_PASSWORD, JWT_SECRET
+    GENESIS_PASSWORD = require_secret("CSII_GENESIS_PASSWORD", min_length=16)
+    JWT_SECRET = require_secret("CSII_JWT_SECRET")
 GENESIS_CSP = 10000.0
 GENESIS_BDP = 100.0
 INITIAL_BLOCK_REWARD_CSP = 10.0   # Deflationary Bitcoin-like controlled base block reward
@@ -439,14 +472,17 @@ class BlockchainState:
 
                 if not acc_id:
                     return False, "Missing account_id for registration"
+                if not pub_key:
+                    # An account without a public key could never prove ownership of its transactions.
+                    return False, "Registration requires a public_key"
                 if acc_id in self.accounts:
                     existing = self.accounts[acc_id]
                     if existing.get("password_hash") == pwd_hash and existing.get("salt") == salt:
                         return True, f"Account '{acc_id}' already registered"
                     return False, f"Account '{acc_id}' is already registered with different credentials"
 
-                # Verify self-signature on registration if provided
-                if pub_key and tx.get("signature") and tx.get("signature") not in ("SELF_REGISTRATION", "GENESIS_SIGNATURE"):
+                # Registration must be self-signed with the key being registered.
+                if tx.get("signature") not in ("SELF_REGISTRATION", "GENESIS_SIGNATURE"):
                     if not verify_transaction_signature(tx, pub_key):
                         return False, "Invalid cryptographic signature on account registration"
 
@@ -479,13 +515,21 @@ class BlockchainState:
             # Strict Nonce Verification: Prevents Replay Attacks
             expected_nonce = sender_acc["nonce"]
             tx_nonce = tx.get("nonce")
+            sig = tx.get("signature", "")
+            trusted_placeholder = sig in SYSTEM_SIGNATURES or is_node_internal_signature(sig)
+            if tx_nonce is None and not trusted_placeholder:
+                return False, "Transaction nonce is required"
             if tx_nonce is not None and int(tx_nonce) != expected_nonce:
                 return False, f"Invalid transaction nonce. Expected: {expected_nonce}, Received: {tx_nonce} (Replay/Sequence Error)"
 
-            # Cryptographic Signature Verification
+            # Cryptographic Signature Verification.
+            # Placeholder signatures are only reachable from this node's own authenticated
+            # REST handlers (submit_tx(internal=True)) or from blocks already in the chain;
+            # NodeServer.submit_tx rejects them at the network boundary.
             pub_key = sender_acc.get("public_key")
-            sig = tx.get("signature", "")
-            if pub_key and not (sig.startswith("DIRECT") or sig in ("SIG_GENESIS", "GENESIS_SIGNATURE", "TEST_BYPASS")):
+            if not trusted_placeholder:
+                if not pub_key:
+                    return False, f"Account '{sender}' has no public key and cannot sign transactions"
                 if not verify_transaction_signature(tx, pub_key):
                     return False, f"Cryptographic signature verification failed for sender '{sender}'"
 
@@ -1331,9 +1375,16 @@ class NodeServer:
 
         self.active_accounts = {}
         self.activity_lock = threading.RLock()
-        self.session_tokens = {}
         self.recent_lottery_winners = []
         self.running = True
+
+        # Authentication layer (see auth.py and SECURITY_SETUP.md)
+        require_runtime_secrets()
+        self.tokens = TokenService(JWT_SECRET, os.path.join(self.data_dir, f"node_{self.port}_auth.db"))
+        self.rate_limiter = RateLimiter()
+        self.login_throttle = LoginThrottle()
+        if not ALLOWED_ORIGINS:
+            print("[!] WARNING: CSII_ALLOWED_ORIGINS is not set; CORS allows any origin. Set it before exposing this node.")
 
         self.init_chain()
         self.refresh_lottery_winners_from_chain()
@@ -2321,10 +2372,30 @@ class NodeServer:
                 self.mempool = valid_mempool
                 return temp_state
 
-    def submit_tx(self, tx: dict) -> tuple[bool, str]:
-        """Validates and adds transaction to local mempool."""
+    def submit_tx(self, tx: dict, internal: bool = False) -> tuple[bool, str]:
+        """
+        Validates and adds transaction to local mempool.
+
+        internal=False is the network boundary (POST /tx/submit, peer gossip): the
+        transaction must carry a real client signature and nonce. internal=True is
+        reserved for transactions this node builds on behalf of a caller whose
+        bearer token it has already verified.
+        """
+        if not isinstance(tx, dict):
+            return False, "Transaction must be a JSON object"
+        if not internal:
+            sig = tx.get("signature", "")
+            if tx.get("sender") == "SYSTEM" or tx.get("action") in SYSTEM_ACTIONS:
+                return False, "System transactions cannot be submitted by clients"
+            if not isinstance(sig, str) or not sig or sig in SYSTEM_SIGNATURES or is_node_internal_signature(sig) \
+                    or sig in ("SELF_REGISTRATION", "TEST_BYPASS"):
+                return False, "A client signature is required"
+            if tx.get("nonce") is None and tx.get("action") != "ACCOUNT_REGISTER":
+                return False, "Transaction nonce is required"
         with self.mempool_lock:
             tx_id = tx.get("tx_id")
+            if not isinstance(tx_id, str) or not tx_id:
+                return False, "Transaction tx_id is required"
             if any(t.get("tx_id") == tx_id for t in self.mempool):
                 return True, "Transaction already in mempool"
 
@@ -2362,22 +2433,74 @@ class NodeServer:
             def log_message(self, format, *args):
                 return
 
+            # Routes that need no bearer token. Everything else on POST is authenticated.
+            PUBLIC_POST_ROUTES = frozenset({
+                "/login", "/register", "/auth/refresh", "/operator/login",
+                "/tx/submit",        # proves itself with the client signature
+                "/block/new", "/peers/add",  # peer gossip (peer authentication is a follow-up)
+                "/contracts/query",  # read-only
+            })
+            # Body fields that name the acting account. They must equal the token subject.
+            IDENTITY_FIELDS = {
+                "/activity/ping": ("account_id",),
+                "/auth/logout": ("account_id",),
+                "/marketplace/create": ("creator", "author"),
+                "/marketplace/claim": ("account_id",),
+                "/marketplace/cancel": ("account_id",),
+                "/contracts/deploy": ("sender",),
+                "/contracts/call": ("sender",),
+                "/groups/create": ("account_id",),
+                "/groups/leave": ("account_id",),
+                "/groups/transfer": ("account_id",),
+                "/groups/invite": ("account_id",),
+                "/groups/join": ("account_id",),
+                "/groups/poll/create": ("account_id",),
+                "/groups/poll/vote": ("account_id",),
+                "/groups/poll/execute": ("account_id",),
+            }
+            AUTH_RATE_LIMITED = frozenset({"/login", "/register", "/auth/refresh", "/operator/login"})
+
+            def _cors_headers(self):
+                origin = self.headers.get("Origin")
+                if not origin:
+                    return
+                if not ALLOWED_ORIGINS:
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                elif origin in ALLOWED_ORIGINS:
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
+                else:
+                    return
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Max-Age", "600")
+
+            def _client_ip(self) -> str:
+                peer_ip = self.client_address[0]
+                forwarded = self.headers.get("X-Forwarded-For")
+                # Only the local gateway is trusted to report the real client address.
+                if forwarded and peer_ip in ("127.0.0.1", "::1"):
+                    return forwarded.split(",")[0].strip()
+                return peer_ip
+
+            def _is_loopback_direct(self) -> bool:
+                """True when the caller is on this machine and did not come through the gateway."""
+                return self.client_address[0] in ("127.0.0.1", "::1") and not self.headers.get("X-Forwarded-For")
+
             def send_json(self, status_code: int, data: dict):
                 body = json.dumps(data, indent=2).encode("utf-8")
                 self.send_response(status_code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Headers", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self._cors_headers()
                 self.end_headers()
                 self.wfile.write(body)
 
             def do_OPTIONS(self):
-                self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Headers", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_response(204)
+                self._cors_headers()
                 self.end_headers()
 
             def do_GET(self):
@@ -2870,7 +2993,15 @@ class NodeServer:
 
             def do_POST(self):
                 url = self.path.split("?")[0].rstrip("/")
-                content_length = int(self.headers.get("Content-Length", 0))
+                client_ip = self._client_ip()
+                try:
+                    content_length = int(self.headers.get("Content-Length", 0))
+                except ValueError:
+                    self.send_json(400, {"error": "Invalid Content-Length"})
+                    return
+                if content_length > MAX_BODY_BYTES:
+                    self.send_json(413, {"error": "Request body too large"})
+                    return
                 body = self.rfile.read(content_length) if content_length > 0 else b"{}"
 
                 try:
@@ -2878,13 +3009,55 @@ class NodeServer:
                 except Exception:
                     self.send_json(400, {"error": "Invalid JSON body"})
                     return
+                if not isinstance(payload, dict):
+                    self.send_json(400, {"error": "JSON body must be an object"})
+                    return
+
+                # Per-IP throttle on credential endpoints: 10 burst, one new attempt every 5 s.
+                if url in self.AUTH_RATE_LIMITED and not node.rate_limiter.allow(f"{url}:{client_ip}", capacity=10, refill_per_sec=0.2):
+                    audit("auth.rate_limited", route=url, ip=client_ip)
+                    self.send_json(429, {"error": "Too many requests. Try again shortly."})
+                    return
+
+                # Bearer authentication for every non-public POST route.
+                auth_claims = None
+                if url not in self.PUBLIC_POST_ROUTES:
+                    bearer = parse_bearer(self.headers)
+                    if not bearer:
+                        self.send_json(401, {"error": "Authentication required"})
+                        return
+                    try:
+                        auth_claims = node.tokens.verify_access(bearer)
+                    except AuthError as e:
+                        audit("auth.token_rejected", route=url, ip=client_ip, reason=str(e))
+                        self.send_json(401, {"error": "Invalid or expired session. Please sign in again."})
+                        return
+                    subject = auth_claims["sub"]
+                    # The acting account always comes from the token, never from the body.
+                    for field in self.IDENTITY_FIELDS.get(url, ()):
+                        supplied = payload.get(field)
+                        if supplied is None or supplied == "":
+                            payload[field] = subject
+                        else:
+                            supplied_clean = str(supplied).strip().lstrip("@")
+                            if node.state.resolve_account_id(supplied_clean) != subject and supplied_clean != subject:
+                                audit("auth.identity_mismatch", route=url, ip=client_ip, sub=subject, field=field)
+                                self.send_json(403, {"error": "You can only act on your own account"})
+                                return
+                            payload[field] = subject
 
                 if url == "/login":
                     raw_id = payload.get("account_id") or ""
-                    acc_id = raw_id.strip().lstrip("@")
+                    acc_id = str(raw_id).strip().lstrip("@")
                     pwd = payload.get("password") or ""
-                    if not acc_id or not pwd:
+                    if not acc_id or not pwd or not isinstance(pwd, str):
                         self.send_json(400, {"error": "account_id and password required"})
+                        return
+
+                    locked = node.login_throttle.locked_for(acc_id.lower())
+                    if locked:
+                        audit("auth.login_locked", account=acc_id, ip=client_ip, retry_after=locked)
+                        self.send_json(429, {"error": "Too many failed attempts. Try again later.", "retry_after": locked})
                         return
 
                     eff_state = node.get_effective_state()
@@ -2896,48 +3069,80 @@ class NodeServer:
                         actual_acc_id = eff_state.resolve_account_id(acc_id)
                         if actual_acc_id and eff_state.verify_account(actual_acc_id, pwd):
                             verified = True
+                    if not actual_acc_id:
+                        # Unknown account: burn the same hashing cost so timing does not reveal existence.
+                        hash_password(pwd, GENESIS_SALT)
 
+                    acc_data = None
                     if verified and actual_acc_id:
                         acc_data = eff_state.accounts.get(actual_acc_id) or node.state.accounts.get(actual_acc_id)
-                        if not acc_data:
-                            self.send_json(401, {"error": "Invalid account credentials"})
-                            return
 
-                        token = secrets.token_hex(24)
-                        node.session_tokens[token] = actual_acc_id
-                        node.register_client_activity(actual_acc_id)
-                        salt = acc_data.get("salt", "")
-                        privkey, pub_hex = derive_account_keypair(pwd, salt)
-                        balances = eff_state.get_balances(actual_acc_id)
-                        frozen_balances = acc_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0})
-                        is_verified = acc_data.get("is_verified", False)
-                        ver_status = acc_data.get("verification_status", "PENDING" if float(frozen_balances.get("BDP", 0.0)) > 0 else "VERIFIED")
-
-                        # Forge pending block if mempool has unconfirmed transactions
-                        with node.mempool_lock:
-                            has_txs = bool(node.mempool)
-                        if has_txs:
-                            threading.Thread(target=node.forge_block, daemon=True).start()
-
-                        self.send_json(200, {
-                            "success": True,
-                            "token": token,
-                            "account_id": actual_acc_id,
-                            "salt": salt,
-                            "public_key": acc_data.get("public_key") or pub_hex,
-                            "private_key": f"{privkey:064x}",
-                            "nonce": acc_data.get("nonce", 0),
-                            "balances": balances,
-                            "frozen_balances": frozen_balances,
-                            "is_verified": is_verified,
-                            "verification_status": ver_status
-                        })
-                    else:
+                    if not acc_data:
+                        node.login_throttle.record_failure(acc_id.lower())
+                        audit("auth.login_failed", account=acc_id, ip=client_ip)
                         self.send_json(401, {"error": "Invalid account credentials"})
+                        return
+
+                    node.login_throttle.record_success(acc_id.lower())
+                    node.register_client_activity(actual_acc_id)
+                    salt = acc_data.get("salt", "")
+                    public_key = acc_data.get("public_key") or derive_account_keypair(pwd, salt)[1]
+                    role = "council" if actual_acc_id == GENESIS_ACCOUNT else "student"
+                    tokens = node.tokens.issue(actual_acc_id, role=role, public_key=public_key)
+                    balances = eff_state.get_balances(actual_acc_id)
+                    frozen_balances = acc_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0})
+                    is_verified = acc_data.get("is_verified", False)
+                    ver_status = acc_data.get("verification_status", "PENDING" if float(frozen_balances.get("BDP", 0.0)) > 0 else "VERIFIED")
+
+                    # Forge pending block if mempool has unconfirmed transactions
+                    with node.mempool_lock:
+                        has_txs = bool(node.mempool)
+                    if has_txs:
+                        threading.Thread(target=node.forge_block, daemon=True).start()
+
+                    audit("auth.login_ok", account=actual_acc_id, ip=client_ip, role=role)
+                    # The private key is never returned: clients derive it locally from password + salt.
+                    self.send_json(200, {
+                        "success": True,
+                        "token": tokens["access_token"],  # legacy alias for older clients
+                        **tokens,
+                        "account_id": actual_acc_id,
+                        "salt": salt,
+                        "public_key": public_key,
+                        "nonce": acc_data.get("nonce", 0),
+                        "balances": balances,
+                        "frozen_balances": frozen_balances,
+                        "is_verified": is_verified,
+                        "verification_status": ver_status
+                    })
+
+                elif url == "/auth/refresh":
+                    refresh_token = payload.get("refresh_token")
+                    if not isinstance(refresh_token, str) or not refresh_token:
+                        self.send_json(400, {"error": "refresh_token required"})
+                        return
+                    try:
+                        tokens = node.tokens.refresh(refresh_token)
+                    except AuthError as e:
+                        audit("auth.refresh_rejected", ip=client_ip, reason=str(e))
+                        self.send_json(401, {"error": "Session expired. Please sign in again."})
+                        return
+                    audit("auth.refresh_ok", ip=client_ip)
+                    self.send_json(200, {"success": True, **tokens})
+
+                elif url == "/auth/logout":
+                    node.tokens.revoke(access_claims=auth_claims, refresh_token=payload.get("refresh_token"))
+                    audit("auth.logout", account=auth_claims["sub"], ip=client_ip)
+                    self.send_json(200, {"success": True})
 
                 elif url == "/operator/login":
+                    # Attaching an operator account redirects this node's block rewards; local console only.
+                    if not self._is_loopback_direct():
+                        audit("auth.operator_login_remote_denied", ip=client_ip)
+                        self.send_json(403, {"error": "Operator login is only available from the node host"})
+                        return
                     raw_id = payload.get("account_id") or ""
-                    acc_id = raw_id.strip().lstrip("@")
+                    acc_id = str(raw_id).strip().lstrip("@")
                     pwd = payload.get("password") or ""
                     if not acc_id or not pwd:
                         self.send_json(400, {"error": "account_id and password required"})
@@ -2963,6 +3168,7 @@ class NodeServer:
                                 "heartbeat_count": 1,
                                 "nonce": secrets.token_hex(8)
                             }
+                        audit("auth.operator_attached", account=actual_acc_id, ip=client_ip)
                         print(f"[*] Node operator attached: '{actual_acc_id}' (mining rewards active)")
                         self.send_json(200, {
                             "success": True,
@@ -2970,15 +3176,22 @@ class NodeServer:
                             "operator_account": actual_acc_id
                         })
                     else:
+                        audit("auth.operator_login_failed", account=acc_id, ip=client_ip)
                         self.send_json(401, {"error": "Invalid account credentials"})
 
                 elif url == "/register":
                     raw_id = payload.get("account_id") or ""
-                    acc_id = raw_id.strip().lstrip("@")
+                    acc_id = str(raw_id).strip().lstrip("@")
                     pwd = payload.get("password") or ""
-                    student_id = (payload.get("student_id") or "").strip()
-                    if not acc_id or not pwd:
+                    student_id = str(payload.get("student_id") or "").strip()
+                    if not acc_id or not pwd or not isinstance(pwd, str):
                         self.send_json(400, {"error": "account_id and password required"})
+                        return
+                    if not ACCOUNT_ID_PATTERN.fullmatch(acc_id):
+                        self.send_json(400, {"error": "Username must be 3-32 characters: letters, digits, '.', '_' or '-'"})
+                        return
+                    if len(pwd) < MIN_PASSWORD_LENGTH:
+                        self.send_json(400, {"error": f"Password must be at least {MIN_PASSWORD_LENGTH} characters"})
                         return
 
                     eff_state = node.get_effective_state()
@@ -3009,7 +3222,7 @@ class NodeServer:
                     }
                     reg_tx["signature"] = sign_transaction_payload(reg_tx, privkey)
 
-                    ok, msg = node.submit_tx(reg_tx)
+                    ok, msg = node.submit_tx(reg_tx, internal=True)
                     if not ok:
                         self.send_json(400, {"error": msg})
                         return
@@ -3017,16 +3230,16 @@ class NodeServer:
                     # Trigger block forge immediately
                     threading.Thread(target=node.forge_block, daemon=True).start()
 
-                    token = secrets.token_hex(24)
-                    node.session_tokens[token] = acc_id
+                    tokens = node.tokens.issue(acc_id, role="student", public_key=pub_hex)
                     node.register_client_activity(acc_id)
+                    audit("auth.register_ok", account=acc_id, ip=client_ip)
                     self.send_json(200, {
                         "success": True,
-                        "token": token,
+                        "token": tokens["access_token"],  # legacy alias for older clients
+                        **tokens,
                         "account_id": acc_id,
                         "salt": salt,
                         "public_key": pub_hex,
-                        "private_key": f"{privkey:064x}",
                         "nonce": 0,
                         "balances": {"CSP": 0.0, "BDP": 0.0},
                         "frozen_balances": {"CSP": 0.0, "BDP": DEFAULT_SIGNUP_BDP},
@@ -3035,19 +3248,13 @@ class NodeServer:
                     })
 
                 elif url == "/activity/ping":
-                    acc_id = payload.get("account_id")
-                    token = payload.get("token")
-                    if token and node.session_tokens.get(token) == acc_id:
-                        proof = node.register_client_activity(acc_id)
-                        self.send_json(200, {"success": True, "proof": proof})
-                    elif acc_id and node.state.accounts.get(acc_id):
-                        proof = node.register_client_activity(acc_id)
-                        self.send_json(200, {"success": True, "proof": proof})
-                    else:
-                        self.send_json(401, {"error": "Unauthorized activity ping"})
+                    # Identity comes from the verified bearer token (bound above).
+                    acc_id = payload["account_id"]
+                    proof = node.register_client_activity(acc_id)
+                    self.send_json(200, {"success": True, "proof": proof})
 
                 elif url == "/tx/submit":
-                    ok, msg = node.submit_tx(payload)
+                    ok, msg = node.submit_tx(payload, internal=False)
                     if ok:
                         self.send_json(200, {"success": True, "message": msg, "tx_id": payload.get("tx_id")})
                     else:
@@ -3152,7 +3359,7 @@ class NodeServer:
                             "fee": 0.0,
                             "signature": "DIRECT_MARKETPLACE"
                         }
-                    ok, msg = node.submit_tx(create_tx)
+                    ok, msg = node.submit_tx(create_tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {
@@ -3245,7 +3452,7 @@ class NodeServer:
                         "signature": "DIRECT_CLAIM"
                     }
 
-                    ok, msg = node.submit_tx(claim_tx)
+                    ok, msg = node.submit_tx(claim_tx, internal=True)
                     if ok:
                         node.forge_block()
                         eff_after = node.get_effective_state()
@@ -3308,7 +3515,7 @@ class NodeServer:
                             "fee": 0.0,
                             "signature": "DIRECT_MARKETPLACE"
                         }
-                    ok, msg = node.submit_tx(cancel_tx)
+                    ok, msg = node.submit_tx(cancel_tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {
@@ -3358,7 +3565,7 @@ class NodeServer:
                         "signature": "DIRECT_CONTRACT"
                     }
 
-                    ok, msg = node.submit_tx(deploy_tx)
+                    ok, msg = node.submit_tx(deploy_tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {
@@ -3409,7 +3616,7 @@ class NodeServer:
                         "signature": "DIRECT_CONTRACT"
                     }
 
-                    ok, msg = node.submit_tx(call_tx)
+                    ok, msg = node.submit_tx(call_tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {
@@ -3503,7 +3710,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg, "group_name": group_name})
@@ -3541,7 +3748,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg})
@@ -3597,7 +3804,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg, "tx_id": tx["tx_id"]})
@@ -3628,7 +3835,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg})
@@ -3659,7 +3866,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg})
@@ -3698,7 +3905,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg})
@@ -3731,7 +3938,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         # Return updated poll status
@@ -3768,7 +3975,7 @@ class NodeServer:
                         "timestamp": time.time(),
                         "signature": "DIRECT_GROUP"
                     }
-                    ok, msg = node.submit_tx(tx)
+                    ok, msg = node.submit_tx(tx, internal=True)
                     if ok:
                         node.forge_block()
                         self.send_json(200, {"success": True, "message": msg})
@@ -4138,8 +4345,17 @@ def main():
         print(f"[!] Notice: Port {args.port} is already in use. Automatically assigned port {target_port} for this node.")
 
     target_udp_port = args.udp_port
-    account_id = args.account
-    password = args.password
+    # Prefer environment variables: CLI flags leak the password into `ps` and shell history.
+    account_id = args.account or os.environ.get("CSII_OPERATOR_ACCOUNT") or None
+    password = args.password or os.environ.get("CSII_OPERATOR_PASSWORD") or None
+    if args.password:
+        print("[!] WARNING: --password is visible to other processes. Prefer CSII_OPERATOR_PASSWORD in .env.")
+
+    try:
+        require_runtime_secrets()
+    except RuntimeError as e:
+        print(f"\n[!] Fatal: {e}")
+        sys.exit(2)
 
     if not active_peers:
         print("[*] No registered nodes detected in the system.")

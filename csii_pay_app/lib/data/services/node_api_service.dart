@@ -417,40 +417,107 @@ class ApiResult<T> {
         data = null;
 }
 
+/// Session tokens issued by the node. The access token is short-lived and sent
+/// as a bearer header; the refresh token rotates on every use.
+class AuthTokens {
+  final String accessToken;
+  final String refreshToken;
+  const AuthTokens(this.accessToken, this.refreshToken);
+
+  static AuthTokens? fromJson(Map<String, dynamic> j) {
+    final access = j['access_token'] as String?;
+    final refresh = j['refresh_token'] as String?;
+    if (access == null || access.isEmpty) return null;
+    return AuthTokens(access, refresh ?? '');
+  }
+}
+
 class NodeApiService {
   String nodeUrl;
   static const _timeout = Duration(seconds: 8);
 
+  String? accessToken;
+  String? refreshToken;
+
+  /// Invoked whenever the session changes (issued, rotated or cleared) so the
+  /// owner can persist the refresh token.
+  void Function(AuthTokens? tokens)? onTokensChanged;
+
   NodeApiService(this.nodeUrl);
+
+  bool get hasSession => accessToken != null && accessToken!.isNotEmpty;
 
   Uri _uri(String path) => Uri.parse('$nodeUrl$path');
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        'User-Agent': 'CSII-Pay-Flutter',
-      };
-
-  Future<ApiResult<Map<String, dynamic>>> _get(String path) async {
-    try {
-      final resp =
-          await http.get(_uri(path), headers: _headers).timeout(_timeout);
-      final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (resp.statusCode >= 200 && resp.statusCode < 300) {
-        return ApiResult.ok(body);
-      }
-      return ApiResult.err(
-          body['error']?.toString() ?? 'HTTP ${resp.statusCode}');
-    } catch (e) {
-      return ApiResult.err(e.toString());
+  Map<String, String> get _headers {
+    final h = <String, String>{
+      'Content-Type': 'application/json',
+      'User-Agent': 'CSII-Pay-Flutter',
+    };
+    if (accessToken != null && accessToken!.isNotEmpty) {
+      h['Authorization'] = 'Bearer $accessToken';
     }
+    return h;
   }
 
-  Future<ApiResult<Map<String, dynamic>>> _post(
-      String path, Map<String, dynamic> body) async {
+  static bool _isAuthRoute(String path) =>
+      path == '/login' || path == '/register' || path.startsWith('/auth/');
+
+  void _captureTokens(Map<String, dynamic> j) {
+    final t = AuthTokens.fromJson(j);
+    if (t == null) return;
+    accessToken = t.accessToken;
+    if (t.refreshToken.isNotEmpty) refreshToken = t.refreshToken;
+    onTokensChanged?.call(AuthTokens(accessToken!, refreshToken ?? ''));
+  }
+
+  void clearSession() {
+    accessToken = null;
+    refreshToken = null;
+    onTokensChanged?.call(null);
+  }
+
+  /// Exchanges the refresh token for a new access/refresh pair.
+  Future<bool> refreshSession() async {
+    final rt = refreshToken;
+    if (rt == null || rt.isEmpty) return false;
+    final r = await _request('POST', '/auth/refresh', {'refresh_token': rt}, allowRefresh: false);
+    if (r.success && r.data != null && r.data!['access_token'] != null) {
+      _captureTokens(r.data!);
+      return true;
+    }
+    clearSession();
+    return false;
+  }
+
+  /// Revokes the current session on the node (best effort) and forgets it locally.
+  Future<void> logout() async {
+    if (hasSession) {
+      await _request('POST', '/auth/logout', {'refresh_token': refreshToken ?? ''}, allowRefresh: false);
+    }
+    clearSession();
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> _request(
+    String method,
+    String path,
+    Map<String, dynamic>? body, {
+    bool allowRefresh = true,
+  }) async {
     try {
-      final resp = await http
-          .post(_uri(path), headers: _headers, body: jsonEncode(body))
-          .timeout(_timeout);
+      final resp = method == 'GET'
+          ? await http.get(_uri(path), headers: _headers).timeout(_timeout)
+          : await http
+              .post(_uri(path), headers: _headers, body: jsonEncode(body ?? const {}))
+              .timeout(_timeout);
+
+      // Access tokens last 15 minutes: on 401, rotate once and retry.
+      if (resp.statusCode == 401 && allowRefresh && !_isAuthRoute(path) && refreshToken != null) {
+        if (await refreshSession()) {
+          return _request(method, path, body, allowRefresh: false);
+        }
+      }
+
       final respBody = jsonDecode(resp.body) as Map<String, dynamic>;
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         return ApiResult.ok(respBody);
@@ -461,6 +528,13 @@ class NodeApiService {
       return ApiResult.err(e.toString());
     }
   }
+
+  Future<ApiResult<Map<String, dynamic>>> _get(String path) =>
+      _request('GET', path, null);
+
+  Future<ApiResult<Map<String, dynamic>>> _post(
+          String path, Map<String, dynamic> body) =>
+      _request('POST', path, body);
 
   Future<ApiResult<NodeStatus>> getStatus() async {
     final r = await _get('/status');
@@ -474,6 +548,7 @@ class NodeApiService {
     final r =
         await _post('/login', {'account_id': cleanId, 'password': password});
     if (r.success && r.data!['success'] == true) {
+      _captureTokens(r.data!);
       final actualAccountId = r.data!['account_id'] as String? ?? cleanId;
       final acc = AccountInfo(
         accountId: actualAccountId,
@@ -505,6 +580,7 @@ class NodeApiService {
     }
     final r = await _post('/register', body);
     if (r.success && r.data!['success'] == true) {
+      _captureTokens(r.data!);
       final actualAccountId = r.data!['account_id'] as String? ?? cleanId;
       final acc = AccountInfo(
         accountId: actualAccountId,
@@ -560,9 +636,10 @@ class NodeApiService {
     return ApiResult.err(r.error);
   }
 
-  Future<ApiResult<bool>> ping(String accountId, String token) async {
-    final r = await _post(
-        '/activity/ping', {'account_id': accountId, 'token': token});
+  /// Activity heartbeat. The account is taken from the bearer token server-side.
+  Future<ApiResult<bool>> ping() async {
+    if (!hasSession) return const ApiResult.err('Not signed in');
+    final r = await _post('/activity/ping', const {});
     if (r.success) return const ApiResult.ok(true);
     return ApiResult.err(r.error);
   }

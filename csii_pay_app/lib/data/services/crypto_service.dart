@@ -156,3 +156,57 @@ String randomHex(int bytes) {
 String generateTxId(String prefix) {
   return hashData('${prefix}_${DateTime.now().millisecondsSinceEpoch}_${randomHex(4)}');
 }
+
+/// PBKDF2-HMAC-SHA256 (RFC 8018). Byte-for-byte compatible with Python's
+/// hashlib.pbkdf2_hmac("sha256", ...), which the node uses for key derivation.
+List<int> pbkdf2Sha256(List<int> password, List<int> salt, int iterations, int dkLen) {
+  final mac = Hmac(sha256, password);
+  final out = <int>[];
+  var block = 1;
+  while (out.length < dkLen) {
+    final saltBlock = <int>[
+      ...salt,
+      (block >> 24) & 0xff,
+      (block >> 16) & 0xff,
+      (block >> 8) & 0xff,
+      block & 0xff,
+    ];
+    var u = mac.convert(saltBlock).bytes;
+    final t = List<int>.from(u);
+    for (var i = 1; i < iterations; i++) {
+      u = mac.convert(u).bytes;
+      for (var j = 0; j < t.length; j++) {
+        t[j] ^= u[j];
+      }
+    }
+    out.addAll(t);
+    block++;
+  }
+  return out.sublist(0, dkLen);
+}
+
+class AccountKeypair {
+  final BigInt privateKey;
+  final String publicKeyHex;
+  const AccountKeypair(this.privateKey, this.publicKeyHex);
+
+  String get privateKeyHex => privateKey.toRadixString(16).padLeft(64, '0');
+}
+
+const int kKeyDerivationIterations = 50000;
+
+/// Derives the account's secp256k1 keypair from password + salt on the device.
+/// Mirrors node.py `derive_account_keypair`; the node no longer returns private keys.
+/// Roughly 50k HMAC rounds: expect ~1 s on mobile, a few seconds on web.
+AccountKeypair deriveAccountKeypair(String password, String salt) {
+  final seed = pbkdf2Sha256(
+    utf8.encode(password),
+    utf8.encode('$salt:CSII_PAY_PRIVKEY'),
+    kKeyDerivationIterations,
+    32,
+  );
+  final priv = bytesToBigInt(seed) % (SECP256K1_N - BigInt.one) + BigInt.one;
+  final pub = ecPointMul(ECPoint(SECP256K1_GX, SECP256K1_GY), priv)!;
+  final pubHex = pub.x.toRadixString(16).padLeft(64, '0') + pub.y.toRadixString(16).padLeft(64, '0');
+  return AccountKeypair(priv, pubHex);
+}

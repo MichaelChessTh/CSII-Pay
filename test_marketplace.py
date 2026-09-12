@@ -1,13 +1,22 @@
 import unittest
 import hashlib
 import time
-from node import BlockchainState, hash_data
+from node import BlockchainState, hash_data, derive_account_keypair, sign_transaction_payload
 
 class TestMarketplaceAndHistory(unittest.TestCase):
     def setUp(self):
         self.state = BlockchainState()
         self.state.register_account("student_alice", "pass1", initial_csp=100.0, initial_bdp=100.0)
         self.state.register_account("student_bob", "pass2", initial_csp=50.0, initial_bdp=100.0)
+        self._passwords = {"student_alice": "pass1", "student_bob": "pass2"}
+
+    def _apply(self, tx):
+        """Sign the transaction with the sender's real key, then apply it (no bypass exists any more)."""
+        if tx.get("signature") == "TEST_BYPASS":
+            acc = self.state.accounts[tx["sender"]]
+            privkey, _ = derive_account_keypair(self._passwords[tx["sender"]], acc["salt"])
+            tx["signature"] = sign_transaction_payload(tx, privkey)
+        return self.state.apply_transaction(tx)
 
     def test_marketplace_creation_and_escrow(self):
         secret = "123456"
@@ -34,7 +43,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "timestamp": time.time()
         }
         
-        ok, msg = self.state.apply_transaction(tx_create)
+        ok, msg = self._apply(tx_create)
         self.assertTrue(ok, msg)
         self.assertEqual(self.state.accounts["student_alice"]["balances"]["CSP"], 70.0)
         self.assertIn("JOB_001", self.state.marketplace_jobs)
@@ -64,7 +73,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "signature": "TEST_BYPASS",
             "timestamp": time.time()
         }
-        self.state.apply_transaction(tx_create)
+        self._apply(tx_create)
         
         # Bob tries wrong codes
         # Attempt 1
@@ -75,7 +84,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "nonce": 0,
             "signature": "TEST_BYPASS"
         }
-        ok1, msg1 = self.state.apply_transaction(tx_wrong1)
+        ok1, msg1 = self._apply(tx_wrong1)
         self.assertFalse(ok1)
         self.assertIn("attempt 1/3", msg1)
         self.assertEqual(self.state.accounts["student_bob"]["balances"]["CSP"], 50.0)
@@ -88,7 +97,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "nonce": 1,
             "signature": "TEST_BYPASS"
         }
-        ok2, msg2 = self.state.apply_transaction(tx_wrong2)
+        ok2, msg2 = self._apply(tx_wrong2)
         self.assertFalse(ok2)
         self.assertIn("attempt 2/3", msg2)
         self.assertEqual(self.state.accounts["student_bob"]["balances"]["CSP"], 50.0)
@@ -101,7 +110,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "nonce": 2,
             "signature": "TEST_BYPASS"
         }
-        ok3, msg3 = self.state.apply_transaction(tx_wrong3)
+        ok3, msg3 = self._apply(tx_wrong3)
         self.assertFalse(ok3)
         self.assertIn("attempt 3/3", msg3)
         self.assertEqual(self.state.accounts["student_bob"]["balances"]["CSP"], 50.0)
@@ -114,7 +123,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "nonce": 3,
             "signature": "TEST_BYPASS"
         }
-        ok4, msg4 = self.state.apply_transaction(tx_wrong4)
+        ok4, msg4 = self._apply(tx_wrong4)
         self.assertFalse(ok4)
         self.assertIn("Fined 10 CSP", msg4)
         # Verify 10 CSP was deducted from Bob's balance: 50.0 - 10.0 = 40.0 CSP!
@@ -128,7 +137,7 @@ class TestMarketplaceAndHistory(unittest.TestCase):
             "nonce": 4,
             "signature": "TEST_BYPASS"
         }
-        ok_win, msg_win = self.state.apply_transaction(tx_correct)
+        ok_win, msg_win = self._apply(tx_correct)
         self.assertTrue(ok_win, msg_win)
         # 40.0 + 20.0 wage = 60.0 CSP!
         self.assertEqual(self.state.accounts["student_bob"]["balances"]["CSP"], 60.0)

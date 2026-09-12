@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,12 +17,15 @@ class WalletRepository {
   final MarketplaceService _marketplaceService;
   static const _keyNodeUrl = 'node_url';
   static const _keyAccountId = 'account_id';
-  static const _keySavedPassword = 'saved_password';
+  static const _keyRefreshToken = 'refresh_token';
+  static const _keyPrivKey = 'wallet_privkey';
   static const _keyAppPin = 'app_pin';
+  static const _keyPinFailures = 'pin_failed_attempts';
+  static const _legacyKeySavedPassword = 'saved_password';
+  static const int maxPinAttempts = 5;
 
   AccountInfo? _cachedAccount;
   UserProfile? _currentProfile;
-  String? _authToken;
   BigInt? _privkey;
 
   WalletRepository(
@@ -30,7 +33,9 @@ class WalletRepository {
     UserProfileService? profileService,
     MarketplaceService? marketplaceService,
   })  : _profileService = profileService ?? _createProfileService(),
-        _marketplaceService = marketplaceService ?? _createMarketplaceService(_api);
+        _marketplaceService = marketplaceService ?? _createMarketplaceService(_api) {
+    _api.onTokensChanged = _persistTokens;
+  }
 
   static UserProfileService _createProfileService() {
     try {
@@ -55,7 +60,6 @@ class WalletRepository {
 
   AccountInfo? get cachedAccount => _cachedAccount;
   UserProfile? get currentProfile => _currentProfile;
-  String? get authToken => _authToken;
   BigInt? get privkey => _privkey;
 
   Future<void> setNodeUrl(String url) async {
@@ -74,22 +78,100 @@ class WalletRepository {
     return prefs.getString(_keyAccountId);
   }
 
-  static Future<String?> getSavedPassword() async {
+  static Future<String?> getSavedRefreshToken() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keySavedPassword);
+    return prefs.getString(_keyRefreshToken);
   }
 
+  /// A resumable session needs an account id and a refresh token.
+  /// The password itself is never written to disk.
   static Future<bool> hasSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     final acc = prefs.getString(_keyAccountId);
-    final pwd = prefs.getString(_keySavedPassword);
-    return acc != null && acc.isNotEmpty && pwd != null && pwd.isNotEmpty;
+    final rt = prefs.getString(_keyRefreshToken);
+    return acc != null && acc.isNotEmpty && rt != null && rt.isNotEmpty;
   }
 
   static Future<void> clearSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyAccountId);
-    await prefs.remove(_keySavedPassword);
+    await prefs.remove(_keyRefreshToken);
+    await prefs.remove(_keyPrivKey);
+    await prefs.remove(_keyPinFailures);
+    // Earlier builds stored the password in plain text: make sure it is gone.
+    await prefs.remove(_legacyKeySavedPassword);
+  }
+
+  /// Counts a wrong PIN. Returns attempts remaining; 0 means the session must be wiped.
+  static Future<int> recordPinFailure() async {
+    final prefs = await SharedPreferences.getInstance();
+    final failures = (prefs.getInt(_keyPinFailures) ?? 0) + 1;
+    await prefs.setInt(_keyPinFailures, failures);
+    return (maxPinAttempts - failures).clamp(0, maxPinAttempts);
+  }
+
+  static Future<void> resetPinFailures() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyPinFailures);
+  }
+
+  Future<void> _persistTokens(AuthTokens? tokens) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (tokens == null || tokens.refreshToken.isEmpty) {
+      await prefs.remove(_keyRefreshToken);
+    } else {
+      await prefs.setString(_keyRefreshToken, tokens.refreshToken);
+    }
+  }
+
+  Future<void> _persistIdentity(String accountId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyAccountId, accountId);
+    await prefs.remove(_legacyKeySavedPassword);
+    if (_privkey != null) {
+      // Interim: the signing key lives in app preferences (never the password).
+      // Moving it to the platform keystore (flutter_secure_storage) is the next step.
+      await prefs.setString(_keyPrivKey, _privkey!.toRadixString(16).padLeft(64, '0'));
+    }
+  }
+
+  /// Derives the signing key on-device; the node no longer returns private keys.
+  void _deriveKey(String password, AccountInfo info) {
+    final salt = info.salt;
+    if (salt == null || salt.isEmpty) {
+      _privkey = null;
+      return;
+    }
+    final kp = deriveAccountKeypair(password, salt);
+    final onChainKey = info.publicKey;
+    if (onChainKey != null && onChainKey.isNotEmpty && onChainKey != kp.publicKeyHex) {
+      debugPrint('[WalletRepository] Derived public key differs from the on-chain key for ${info.accountId}');
+    }
+    _privkey = kp.privateKey;
+  }
+
+  /// Cold start: resume with the stored refresh token instead of re-sending a password.
+  Future<bool> restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final accountId = prefs.getString(_keyAccountId);
+    final refreshToken = prefs.getString(_keyRefreshToken);
+    final privHex = prefs.getString(_keyPrivKey);
+    if (accountId == null || accountId.isEmpty || refreshToken == null || refreshToken.isEmpty) {
+      return false;
+    }
+    _api.refreshToken = refreshToken;
+    if (!await _api.refreshSession()) {
+      await clearSavedCredentials();
+      return false;
+    }
+    final r = await _api.getAccount(accountId);
+    if (!r.success || r.data == null) {
+      return false;
+    }
+    _privkey = privHex != null ? BigInt.tryParse(privHex, radix: 16) : null;
+    _cachedAccount = r.data;
+    _currentProfile = await _profileService.getUserProfile(accountId);
+    return true;
   }
 
   static Future<String?> getAppPin() async {
@@ -214,13 +296,9 @@ class WalletRepository {
     if (r.success && r.data != null) {
       final finalAccountId = (r.data!.accountId.isNotEmpty) ? r.data!.accountId : effectiveAccountId;
       _cachedAccount = r.data;
-      if (r.data!.privateKey != null) {
-        _privkey = BigInt.tryParse(r.data!.privateKey!, radix: 16);
-      }
-      _authToken = _extractToken(r);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyAccountId, finalAccountId);
-      await prefs.setString(_keySavedPassword, password);
+      _deriveKey(password, r.data!);
+      await WalletRepository.resetPinFailures();
+      await _persistIdentity(finalAccountId);
 
       // Load or build user profile
       final existingProfile = await _profileService.getUserProfile(finalAccountId);
@@ -247,12 +325,8 @@ class WalletRepository {
     final r = await _api.register(cleanId, password);
     if (r.success && r.data != null) {
       _cachedAccount = r.data;
-      if (r.data!.privateKey != null) {
-        _privkey = BigInt.tryParse(r.data!.privateKey!, radix: 16);
-      }
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_keyAccountId, cleanId);
-      await prefs.setString(_keySavedPassword, password);
+      _deriveKey(password, r.data!);
+      await _persistIdentity(cleanId);
     }
     return r;
   }
@@ -280,12 +354,8 @@ class WalletRepository {
     }
 
     _cachedAccount = r.data;
-    if (r.data!.privateKey != null) {
-      _privkey = BigInt.tryParse(r.data!.privateKey!, radix: 16);
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyAccountId, cleanUsername);
-    await prefs.setString(_keySavedPassword, password);
+    _deriveKey(password, r.data!);
+    await _persistIdentity(cleanUsername);
 
     // 3. Store profile in Firestore (excluding password)
     final profile = UserProfile(
@@ -464,23 +534,21 @@ class WalletRepository {
   }
 
   Future<void> ping() async {
-    final acc = _cachedAccount;
-    final token = _authToken;
-    if (acc != null && token != null) {
-      await _api.ping(acc.accountId, token);
+    if (_cachedAccount != null && _api.hasSession) {
+      await _api.ping();
     }
   }
 
   Future<void> logout({bool clearSaved = false}) async {
     _cachedAccount = null;
-    _authToken = null;
     _privkey = null;
+    // Revoke on the node and forget the refresh token: a signed-out device must not resume silently.
+    await _api.logout();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyRefreshToken);
+    await prefs.remove(_keyPrivKey);
     if (clearSaved) {
       await clearSavedCredentials();
     }
-  }
-
-  String? _extractToken(ApiResult<dynamic> r) {
-    return null;
   }
 }

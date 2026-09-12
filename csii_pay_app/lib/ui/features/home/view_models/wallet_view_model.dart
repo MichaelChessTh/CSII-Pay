@@ -162,14 +162,27 @@ class WalletViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  int _pinAttemptsRemaining = WalletRepository.maxPinAttempts;
+  int get pinAttemptsRemaining => _pinAttemptsRemaining;
+
   Future<bool> unlockWithPin(String pin) async {
     final saved = await WalletRepository.getAppPin();
-    if (saved == pin.trim()) {
+    if (saved != null && saved.isNotEmpty && saved == pin.trim()) {
+      await WalletRepository.resetPinFailures();
+      _pinAttemptsRemaining = WalletRepository.maxPinAttempts;
       _appState = AppState.authenticated;
       _startTimers();
       await _loadAll();
       notifyListeners();
       return true;
+    }
+    _pinAttemptsRemaining = await WalletRepository.recordPinFailure();
+    if (_pinAttemptsRemaining <= 0) {
+      // Too many guesses: wipe the session and the PIN, require a full sign-in.
+      await WalletRepository.removeAppPin();
+      await logout(clearSaved: true);
+      _error = 'Too many incorrect PIN attempts. Please sign in with your password.';
+      notifyListeners();
     }
     return false;
   }
@@ -192,25 +205,20 @@ class WalletViewModel extends ChangeNotifier {
     if (r.success) {
       _nodeStatus = r.data;
 
-      // 3. Check for saved credentials for seamless auto-login
-      final hasCreds = await WalletRepository.hasSavedCredentials();
-      if (hasCreds) {
-        final savedAcc = await WalletRepository.getSavedAccountId();
-        final savedPwd = await WalletRepository.getSavedPassword();
-        if (savedAcc != null && savedPwd != null) {
-          final loginRes = await _repo.login(savedAcc, savedPwd);
-          if (loginRes.success) {
-            final pinConfigured = await WalletRepository.hasAppPin();
-            if (pinConfigured) {
-              _appState = AppState.pinRequired;
-            } else {
-              _appState = AppState.authenticated;
-              _startTimers();
-              await _loadAll();
-            }
-            _setLoading(false);
-            return;
+      // 3. Resume the previous session with the stored refresh token (no password on disk)
+      if (await WalletRepository.hasSavedCredentials()) {
+        final restored = await _repo.restoreSession();
+        if (restored) {
+          final pinConfigured = await WalletRepository.hasAppPin();
+          if (pinConfigured) {
+            _appState = AppState.pinRequired;
+          } else {
+            _appState = AppState.authenticated;
+            _startTimers();
+            await _loadAll();
           }
+          _setLoading(false);
+          return;
         }
       }
 

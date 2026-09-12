@@ -4,7 +4,18 @@ import time
 import shutil
 from storage import BlockchainStorage
 from contracts import SmartContractEngine, ContractContext, SecurityError, GasExhaustionError
-from node import BlockchainState, NodeServer, hash_data
+from node import BlockchainState, NodeServer, hash_data, derive_account_keypair, sign_transaction_payload
+
+TEST_PASSWORDS = {"alice": "pass_a", "bob": "pass_b"}
+
+
+def apply_signed(state, tx):
+    """Sign with the sender's real key (placeholder signatures are no longer accepted), then apply."""
+    if tx.get("signature") == "TEST_BYPASS":
+        acc = state.accounts[tx["sender"]]
+        privkey, _ = derive_account_keypair(TEST_PASSWORDS[tx["sender"]], acc["salt"])
+        tx["signature"] = sign_transaction_payload(tx, privkey)
+    return state.apply_transaction(tx)
 
 class TestScalingAndSmartContracts(unittest.TestCase):
     def setUp(self):
@@ -167,7 +178,7 @@ def complete_task(ctx, worker_id: str):
             "timestamp": time.time()
         }
 
-        ok, msg = state.apply_transaction(tx_deploy)
+        ok, msg = apply_signed(state, tx_deploy)
         self.assertTrue(ok, msg)
         self.assertEqual(state.accounts["alice"]["balances"]["CSP"], 150.0)  # 200 - 50 = 150
 
@@ -192,7 +203,7 @@ def complete_task(ctx, worker_id: str):
             "signature": "TEST_BYPASS",
             "timestamp": time.time()
         }
-        ok_unauth, err_unauth = state.apply_transaction(tx_unauthorized)
+        ok_unauth, err_unauth = apply_signed(state, tx_unauthorized)
         self.assertFalse(ok_unauth)
         self.assertIn("Only owner can approve", err_unauth)
         self.assertEqual(contract["balances"]["CSP"], 50.0)
@@ -211,7 +222,7 @@ def complete_task(ctx, worker_id: str):
             "signature": "TEST_BYPASS",
             "timestamp": time.time()
         }
-        ok_app, msg_app = state.apply_transaction(tx_approve)
+        ok_app, msg_app = apply_signed(state, tx_approve)
         self.assertTrue(ok_app, msg_app)
 
         # Verify balances: Bob received 50 CSP from contract escrow!
