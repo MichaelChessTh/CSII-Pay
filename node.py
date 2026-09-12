@@ -1385,86 +1385,29 @@ class NodeServer:
             except Exception as e:
                 print(f"[!] Warning: Failed loading from SQLite storage: {e}")
 
-        # 3. Check JSON chain files (current port or port 8000 fallback) and migrate to SQLite
-        candidate_files = [self.chain_file]
-        fallback_8000 = os.path.join(self.data_dir, "node_8000_chain.json")
-        if fallback_8000 not in candidate_files:
-            candidate_files.append(fallback_8000)
-
-        for c_file in candidate_files:
-            if os.path.exists(c_file):
-                try:
-                    with open(c_file, "r") as f:
-                        data = json.load(f)
-                        candidate = data.get("chain", [])
-                        if candidate and self.validate_chain(candidate):
-                            self.chain = candidate
-                            print(f"[*] Loaded {len(self.chain)} verified blocks from {c_file}. Migrating to SQLite WAL...")
-                            for blk in self.chain:
-                                self.storage.append_block(blk)
-                            self.rebuild_state_from_chain()
-                            self.storage.save_checkpoint(self.chain[-1]["index"], self.state.get_state_hash(), self.state.export_dict())
-                            return
-                        else:
-                            print(f"[!] Warning: Existing chain in {c_file} failed validation or is corrupt. Backing up...")
-                            bak_file = f"{c_file}.corrupt_{int(time.time())}.bak"
-                            os.rename(c_file, bak_file)
-                except Exception as e:
-                    print(f"[!] Warning: Failed to load chain file {c_file}: {e}")
-
-        # 4. Check Cloud Firestore for latest chain backup (for ephemeral cloud containers)
-        cloud_chain = self.load_chain_from_cloud()
-        if cloud_chain and self.validate_chain(cloud_chain):
-            self.chain = cloud_chain
-            print(f"[★] Restored {len(self.chain)} verified blocks from Cloud Firestore backup!")
-            for blk in self.chain:
-                self.storage.append_block(blk)
-            self.rebuild_state_from_chain()
-            self.save_chain()
-            return
-
-        # 5. Create canonical Genesis block
-        self.create_genesis_block()
-
-    def load_chain_from_cloud(self) -> list | None:
-        """Fetches blockchain ledger backup from Cloud Firestore if available."""
-        try:
-            url = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/blockchain"
-            req = urllib.request.Request(url, headers={"User-Agent": "CSII-Pay-Cloud-Sync"})
-            with urllib.request.urlopen(req, timeout=4.0) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    fields = data.get("fields", {})
-                    chain_str = fields.get("chain_data", {}).get("stringValue")
-                    if chain_str:
-                        parsed = json.loads(chain_str).get("chain", [])
-                        if parsed:
-                            return parsed
-        except Exception:
-            pass
-        return None
-
-    def sync_chain_to_cloud(self):
-        """Asynchronously backs up current blockchain ledger to Cloud Firestore."""
-        def _sync():
+        # 3. Check legacy JSON chain file and migrate to SQLite
+        if os.path.exists(self.chain_file):
             try:
-                if not self.chain:
-                    return
-                url = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/blockchain"
-                body = json.dumps({
-                    "fields": {
-                        "block_height": {"integerValue": str(len(self.chain) - 1)},
-                        "latest_block_hash": {"stringValue": self.chain[-1]["hash"]},
-                        "chain_data": {"stringValue": json.dumps({"chain": self.chain})},
-                        "updated_at": {"timestampValue": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-                    }
-                }).encode("utf-8")
-                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="PATCH")
-                with urllib.request.urlopen(req, timeout=5.0):
-                    pass
-            except Exception:
-                pass
-        threading.Thread(target=_sync, daemon=True).start()
+                with open(self.chain_file, "r") as f:
+                    data = json.load(f)
+                    candidate = data.get("chain", [])
+                    if candidate and self.validate_chain(candidate):
+                        self.chain = candidate
+                        print(f"[*] Loaded {len(self.chain)} verified blocks from {self.chain_file}. Migrating to SQLite WAL...")
+                        for blk in self.chain:
+                            self.storage.append_block(blk)
+                        self.rebuild_state_from_chain()
+                        self.storage.save_checkpoint(self.chain[-1]["index"], self.state.get_state_hash(), self.state.export_dict())
+                        return
+                    else:
+                        print(f"[!] Warning: Existing chain in {self.chain_file} failed validation or is corrupt. Backing up...")
+                        bak_file = f"{self.chain_file}.corrupt_{int(time.time())}.bak"
+                        os.rename(self.chain_file, bak_file)
+            except Exception as e:
+                print(f"[!] Warning: Failed to load existing chain file: {e}")
+
+        # 4. Create canonical Genesis block
+        self.create_genesis_block()
 
     def create_genesis_block(self):
         """Construct canonical Genesis block."""
@@ -1481,53 +1424,50 @@ class NodeServer:
             initial_bdp=0.0
         )
 
-        genesis_txs = [
-            {
-                "tx_id": hash_data(f"GENESIS_CSP_{GENESIS_ACCOUNT}"),
-                "sender": "SYSTEM",
-                "action": "TRANSFER",
-                "payload": {
-                    "recipient": GENESIS_ACCOUNT,
-                    "token": "CSP",
-                    "amount": GENESIS_CSP
-                },
-                "nonce": 0,
-                "timestamp": 1700000000.0,
-                "signature": "GENESIS_SIGNATURE"
+        genesis_tx = {
+            "tx_id": hash_data("GENESIS_MINT_CSP"),
+            "sender": "SYSTEM",
+            "action": "TRANSFER",
+            "payload": {
+                "recipient": GENESIS_ACCOUNT,
+                "token": "CSP",
+                "amount": GENESIS_CSP
             },
-            {
-                "tx_id": hash_data(f"GENESIS_BDP_{GENESIS_ACCOUNT}"),
-                "sender": "SYSTEM",
-                "action": "TRANSFER",
-                "payload": {
-                    "recipient": GENESIS_ACCOUNT,
-                    "token": "BDP",
-                    "amount": 100.0
-                },
-                "nonce": 1,
-                "timestamp": 1700000000.0,
-                "signature": "GENESIS_SIGNATURE"
-            }
-        ]
+            "nonce": 0,
+            "timestamp": 1700000000.0,
+            "signature": "GENESIS_SIGNATURE"
+        }
+        genesis_tx_bdp = {
+            "tx_id": hash_data("GENESIS_MINT_BDP"),
+            "sender": "SYSTEM",
+            "action": "TRANSFER",
+            "payload": {
+                "recipient": GENESIS_ACCOUNT,
+                "token": "BDP",
+                "amount": GENESIS_BDP
+            },
+            "nonce": 1,
+            "timestamp": 1700000000.0,
+            "signature": "GENESIS_SIGNATURE"
+        }
 
-        for tx in genesis_txs:
-            self.state.apply_transaction(tx)
+        self.state.apply_transaction(genesis_tx)
+        self.state.apply_transaction(genesis_tx_bdp)
 
         genesis_block = {
             "index": 0,
             "prev_hash": "0" * 64,
             "timestamp": 1700000000.0,
             "validator": GENESIS_ACCOUNT,
-            "transactions": genesis_txs,
+            "transactions": [genesis_tx, genesis_tx_bdp],
             "activity_proofs": [],
-            "state_hash": self.state.get_state_hash()
+            "state_hash": self.state.get_state_hash(),
         }
         genesis_block["hash"] = self.compute_block_hash(genesis_block)
-
         self.chain = [genesis_block]
         self.storage.append_block(genesis_block)
+        self.storage.save_checkpoint(0, self.state.get_state_hash(), self.state.export_dict())
         self.save_chain()
-        print(f"[*] Genesis block created. Hash: {genesis_block['hash'][:12]} | State: {genesis_block['state_hash'][:12]}")
 
     def compute_block_hash(self, block: dict) -> str:
         header = {
@@ -1551,9 +1491,6 @@ class NodeServer:
 
             with open(self.chain_file, "w") as f:
                 json.dump({"chain": self.chain}, f, indent=2)
-
-            # Asynchronously sync to Cloud Firestore
-            self.sync_chain_to_cloud()
         except Exception as e:
             print(f"[!] Error saving chain to disk: {e}")
 
@@ -4109,9 +4046,7 @@ def main():
     parser = argparse.ArgumentParser(description="CSII-Pay 2-Layer Cryptocurrency Node")
     parser.add_argument("--account", type=str, default=None, help="Operator account ID")
     parser.add_argument("--password", type=str, default=None, help="Operator password")
-    env_port = os.environ.get("PORT")
-    default_port = int(env_port) if env_port else DEFAULT_HTTP_PORT
-    parser.add_argument("--port", type=int, default=default_port, help=f"HTTP API Port (Default: {default_port})")
+    parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help=f"HTTP API Port (Default: {DEFAULT_HTTP_PORT})")
     parser.add_argument("--udp-port", type=int, default=DEFAULT_UDP_PORT, help=f"UDP Broadcast Port (Default: {DEFAULT_UDP_PORT})")
     parser.add_argument("--peer", type=str, default=None, help="Initial peer to connect to, e.g. http://192.168.1.50:8000")
     parser.add_argument("--data-dir", type=str, default=".", help="Data directory for chain persistence")
@@ -4124,7 +4059,7 @@ def main():
     active_peers = discover_active_network_nodes(args.udp_port, args.peer, args.port, timeout=1.2)
 
     target_port = args.port
-    if not env_port and is_port_in_use(target_port, "0.0.0.0"):
+    if is_port_in_use(target_port, "0.0.0.0"):
         local_peer_url = f"http://127.0.0.1:{target_port}"
         try:
             req = urllib.request.Request(f"{local_peer_url}/status", headers={"User-Agent": "CSII-Pay-Probe"})
