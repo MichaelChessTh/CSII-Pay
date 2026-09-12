@@ -1,0 +1,23 @@
+# CSII-Pay Cloudflare Pages Routing & API Proxy
+# 1. API Endpoints proxied to Koyeb Cloud Node
+/status               https://api.csiipay.app/status               200
+/login                https://api.csiipay.app/login                200
+/register             https://api.csiipay.app/register             200
+/accounts             https://api.csiipay.app/accounts             200
+/account/*            https://api.csiipay.app/account/:splat       200
+/transactions/*       https://api.csiipay.app/transactions/:splat  200
+/activity/*           https://api.csiipay.app/activity/:splat      200
+/mempool              https://api.csiipay.app/mempool              200
+/chain                https://api.csiipay.app/chain                200
+/peers                https://api.csiipay.app/peers                200
+/operator/*           https://api.csiipay.app/operator/:splat      200
+/submit_transaction   https://api.csiipay.app/submit_transaction   200
+/orders/*             https://api.csiipay.app/orders/:splat        200
+/order/*              https://api.csiipay.app/order/:splat         200
+/groups/*             https://api.csiipay.app/groups/:splat        200
+/marketplace/*        https://api.csiipay.app/marketplace/:splat   200
+/contracts/*          https://api.csiipay.app/contracts/:splat     200
+/contract/*           https://api.csiipay.app/contract/:splat      200
+
+# 2. SPA Fallback for Flutter Web client-side routing
+/*                    /index.html                                  200

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:csii_pay_app/ui/core/theme.dart';
 import 'package:csii_pay_app/ui/core/widgets/common_widgets.dart';
@@ -20,6 +21,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<MarketplaceApplication> _allJobs = [];
+  Set<String> _userGroupNames = {};
   bool _isLoading = false;
 
   // Filter state
@@ -71,11 +73,17 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
     }
     final vm = context.read<WalletViewModel>();
     try {
+      if (vm.myGroups.isEmpty) {
+        await vm.loadMyGroups();
+      }
+      final userGroupNames = vm.myGroups.map((g) => g['name']?.toString() ?? '').toSet();
       final jobs = await vm.marketplaceService.fetchApplications(
         currentAccountId: vm.currentAccountId,
+        userGroupNames: userGroupNames,
       );
       if (mounted) {
         setState(() {
+          _userGroupNames = userGroupNames;
           _allJobs = jobs;
           if (!silent) _isLoading = false;
         });
@@ -110,7 +118,14 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
   List<MarketplaceApplication> get _myApplications {
     final vm = context.read<WalletViewModel>();
     final myId = vm.currentAccountId;
-    return _allJobs.where((j) => j.creatorAccountId == myId).toList()
+    final myGroupNames = vm.myGroups.map((g) => g['name']?.toString() ?? '').toSet();
+    return _allJobs.where((j) {
+      if (j.creatorAccountId == myId) return true;
+      if (j.author != null && j.author == myId) return true;
+      if (j.teamName != null && myGroupNames.contains(j.teamName)) return true;
+      if (myGroupNames.contains(j.creatorAccountId)) return true;
+      return false;
+    }).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
@@ -614,6 +629,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
       backgroundColor: Colors.transparent,
       builder: (ctx) => _JobDetailsModal(
         job: job,
+        userGroupNames: _userGroupNames,
         onClaimSuccess: () {
           _loadJobs();
         },
@@ -921,6 +937,68 @@ class _MyJobCard extends StatefulWidget {
 
 class _MyJobCardState extends State<_MyJobCard> {
   bool _revealSecret = false;
+  bool _cancelling = false;
+
+  Future<void> _confirmCancel(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgSurface,
+        title: Text(
+          'Cancel Application?',
+          style: GoogleFonts.outfit(fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+        content: Text(
+          'Are you sure you want to cancel "${widget.job.title}"? Escrowed ${widget.job.wage} ${widget.job.wageToken} will be refunded.',
+          style: GoogleFonts.outfit(color: AppColors.textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            child: Text('Keep Active', style: GoogleFonts.outfit(color: AppColors.textSecondary)),
+            onPressed: () => Navigator.of(ctx).pop(false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Cancel & Refund', style: GoogleFonts.outfit(fontWeight: FontWeight.w700)),
+            onPressed: () => Navigator.of(ctx).pop(true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final vm = context.read<WalletViewModel>();
+      final messenger = ScaffoldMessenger.of(context);
+      setState(() => _cancelling = true);
+      final res = await vm.marketplaceService.cancelApplication(
+        accountId: vm.currentAccountId!,
+        jobId: widget.job.id,
+      );
+      if (mounted) {
+        setState(() => _cancelling = false);
+        if (res.success) {
+          await vm.refresh();
+          widget.onTap();
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Application cancelled and escrow refunded!'),
+              backgroundColor: AppColors.brandPurple,
+            ),
+          );
+        } else {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(res.error ?? 'Cancellation failed'),
+              backgroundColor: AppColors.error,
+            ),
+          );
+        }
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1061,6 +1139,30 @@ class _MyJobCardState extends State<_MyJobCard> {
                 'Give this 6-digit code to the person doing the job once they complete the work so they can unlock their payment.',
                 style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
               ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    side: BorderSide(color: AppColors.error.withValues(alpha: 0.4)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: _cancelling
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.error),
+                        )
+                      : const Icon(Icons.cancel_outlined, size: 16),
+                  label: Text(
+                    _cancelling ? 'Cancelling...' : 'Cancel Application & Refund Escrow',
+                    style: GoogleFonts.outfit(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  onPressed: _cancelling ? null : () => _confirmCancel(context),
+                ),
+              ),
             ] else ...[
               Container(
                 padding: const EdgeInsets.all(12),
@@ -1120,6 +1222,37 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
   final _lineIdCtrl = TextEditingController();
   final _wageCtrl = TextEditingController();
   final _deadlineCtrl = TextEditingController();
+  DateTime? _selectedDeadlineDate;
+
+  Future<void> _pickDeadlineDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDeadlineDate ?? now.add(const Duration(days: 3)),
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 2)),
+      builder: (ctx, child) {
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: AppColors.brandPurple,
+              onPrimary: Colors.white,
+              surface: AppColors.bgSurface,
+              onSurface: Colors.white,
+            ),
+            dialogTheme: const DialogThemeData(backgroundColor: AppColors.bgSurface),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedDeadlineDate = picked;
+        _deadlineCtrl.text = DateFormat('MMM dd, yyyy').format(picked);
+      });
+    }
+  }
 
   final String _type = 'student application';
   String? _selectedTeam; // null = Personal, non-null = team name
@@ -1222,6 +1355,7 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
 
     if (res.success && res.data != null) {
       widget.onCreated(res.data!);
+      await vm.refresh();
       if (mounted) {
         Navigator.pop(context);
         _showSuccessDialog(context, res.data!);
@@ -1523,10 +1657,17 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: AppTextField(
-                    controller: _deadlineCtrl,
-                    label: 'Deadline',
-                    hint: 'e.g. Tomorrow, 5 PM',
+                  child: InkWell(
+                    onTap: _pickDeadlineDate,
+                    borderRadius: BorderRadius.circular(14),
+                    child: IgnorePointer(
+                      child: AppTextField(
+                        controller: _deadlineCtrl,
+                        label: 'Deadline (Date)',
+                        hint: 'Tap to pick date',
+                        suffixIcon: const Icon(Icons.calendar_month_rounded, color: AppColors.brandPurple, size: 20),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -1641,8 +1782,13 @@ class _CreateApplicationModalState extends State<_CreateApplicationModal> {
 // JOB DETAILS MODAL (LINE CONTACT + SECRET CODE CLAIM + 10 CSP FINE PENALTY)
 // ─────────────────────────────────────────────────────────────────────────────
 class _JobDetailsModal extends StatefulWidget {
-  const _JobDetailsModal({required this.job, required this.onClaimSuccess});
+  const _JobDetailsModal({
+    required this.job,
+    this.userGroupNames = const {},
+    required this.onClaimSuccess,
+  });
   final MarketplaceApplication job;
+  final Set<String> userGroupNames;
   final VoidCallback onClaimSuccess;
 
   @override
@@ -1652,8 +1798,72 @@ class _JobDetailsModal extends StatefulWidget {
 class _JobDetailsModalState extends State<_JobDetailsModal> {
   final _codeCtrl = TextEditingController();
   bool _isClaiming = false;
+  bool _cancelling = false;
   String? _claimError;
   String? _claimSuccessMessage;
+
+  Future<void> _confirmCancelJob(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgSurface,
+        title: Text(
+          'Cancel Application?',
+          style: GoogleFonts.outfit(fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+        content: Text(
+          'Are you sure you want to cancel "${widget.job.title}"? Escrowed ${widget.job.wage} ${widget.job.wageToken} will be refunded.',
+          style: GoogleFonts.outfit(color: AppColors.textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            child: Text('Keep Active', style: GoogleFonts.outfit(color: AppColors.textSecondary)),
+            onPressed: () => Navigator.of(ctx).pop(false),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Cancel & Refund', style: GoogleFonts.outfit(fontWeight: FontWeight.w700)),
+            onPressed: () => Navigator.of(ctx).pop(true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final vm = context.read<WalletViewModel>();
+      final messenger = ScaffoldMessenger.of(context);
+      final navigator = Navigator.of(context);
+      setState(() => _cancelling = true);
+      final res = await vm.marketplaceService.cancelApplication(
+        accountId: vm.currentAccountId!,
+        jobId: widget.job.id,
+      );
+      if (mounted) {
+        setState(() => _cancelling = false);
+        if (res.success) {
+          await vm.refresh();
+          widget.onClaimSuccess();
+          navigator.pop(false);
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Application cancelled and escrow refunded!'),
+              backgroundColor: AppColors.brandPurple,
+            ),
+          );
+        } else {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(res.error ?? 'Cancellation failed'),
+              backgroundColor: AppColors.error,
+            ),
+          );
+        }
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -1730,6 +1940,9 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
     final job = widget.job;
     final vm = context.watch<WalletViewModel>();
     final isMine = job.creatorAccountId == vm.currentAccountId;
+    final isMyTeam = (job.teamName != null && widget.userGroupNames.contains(job.teamName)) ||
+        (job.author != null && job.author == vm.currentAccountId);
+    final isCreatorOrTeam = isMine || isMyTeam;
 
     final viewInsets = MediaQuery.of(context).viewInsets;
     final padding = MediaQuery.of(context).padding;
@@ -2016,7 +2229,7 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
             const SizedBox(height: 20),
 
             // Claim section (for applicants)
-            if (job.isOpen && !isMine) ...[
+            if (job.isOpen && !isCreatorOrTeam) ...[
               Text(
                 'Claim Payment (Enter Secret Code)',
                 style: GoogleFonts.outfit(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
@@ -2110,26 +2323,107 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
                   ),
                 ],
               ),
-            ] else if (isMine) ...[
+            ] else if (isCreatorOrTeam) ...[
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: AppColors.bgDeep,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.glassStroke),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.brandCyan.withValues(alpha: 0.3)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'You are the creator of this application.',
-                      style: GoogleFonts.outfit(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.brandCyan),
+                    Row(
+                      children: [
+                        const Icon(Icons.verified_user_rounded, color: AppColors.brandCyan, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            job.teamName != null
+                                ? 'Team Application (${job.teamName})'
+                                : 'You are the creator of this application',
+                            style: GoogleFonts.outfit(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.brandCyan,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     if (job.secretCode != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'Release Secret Code (Share with hired worker upon completion):',
+                        style: GoogleFonts.outfit(fontSize: 11, color: AppColors.textMuted),
+                      ),
                       const SizedBox(height: 6),
-                      Text('Secret Code: ${job.secretCode}',
-                          style: GoogleFonts.robotoMono(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.glassStroke),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              job.secretCode!,
+                              style: GoogleFonts.robotoMono(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                letterSpacing: 2,
+                              ),
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, size: 18, color: AppColors.textSecondary),
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: job.secretCode!));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Secret code copied!'),
+                                    duration: Duration(seconds: 2),
+                                    backgroundColor: AppColors.brandPurple,
+                                  ),
+                                );
+                              },
+                              tooltip: 'Copy Code',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (job.isOpen) ...[
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: AppColors.error),
+                            foregroundColor: AppColors.error,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: _cancelling
+                              ? const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.error),
+                                )
+                              : const Icon(Icons.cancel_outlined, size: 16),
+                          label: Text(
+                            _cancelling ? 'Cancelling...' : 'Cancel Application & Refund Escrow',
+                            style: GoogleFonts.outfit(fontSize: 13, fontWeight: FontWeight.w600),
+                          ),
+                          onPressed: _cancelling ? null : () => _confirmCancelJob(context),
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -2137,8 +2431,10 @@ class _JobDetailsModalState extends State<_JobDetailsModal> {
             ] else ...[
               Center(
                 child: Text(
-                  'This application has already been completed.',
-                  style: GoogleFonts.outfit(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w600),
+                  job.status == 'CANCELLED'
+                      ? 'This application has been cancelled.'
+                      : 'This application has already been completed.',
+                  style: GoogleFonts.outfit(color: AppColors.textSecondary, fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ),
             ],

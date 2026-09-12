@@ -9,7 +9,7 @@ import 'package:csii_pay_app/domain/models/marketplace_application.dart';
 import 'package:csii_pay_app/data/services/node_api_service.dart';
 
 class MarketplaceService {
-  final FirebaseFirestore _firestore;
+  final FirebaseFirestore? _firestore;
   final NodeApiService _nodeApi;
   static const String _restBaseUrl =
       'https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/marketplace_applications';
@@ -17,11 +17,11 @@ class MarketplaceService {
   MarketplaceService({
     FirebaseFirestore? firestore,
     required NodeApiService nodeApi,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
+  })  : _firestore = firestore,
         _nodeApi = nodeApi;
 
-  CollectionReference<Map<String, dynamic>> get _jobsRef =>
-      _firestore.collection('marketplace_applications');
+  CollectionReference<Map<String, dynamic>>? get _jobsRef =>
+      _firestore?.collection('marketplace_applications');
 
   /// Generate cryptographically secure 6-digit numeric code
   static String generateSecretCode() {
@@ -91,6 +91,7 @@ class MarketplaceService {
       'wage': wage,
       'wage_token': wageToken,
       'secret_hash': secretHash,
+      'secret_code': secretCode,
       if (teamName != null) 'team_name': teamName,
       if (teamName != null) 'author': creatorAccountId,
     };
@@ -120,13 +121,19 @@ class MarketplaceService {
       secretHash: secretHash,
       status: 'OPEN',
       createdAt: DateTime.now(),
+      teamName: teamName,
+      author: creatorAccountId,
     );
 
     // 2. Mirror in Firestore for fast multi-attribute search & cross-device sync
-    try {
-      await _jobsRef.doc(jobId).set(app.toJson(), SetOptions(merge: true));
-    } catch (e) {
-      debugPrint('[MarketplaceService] SDK firestore save error ($e), trying REST fallback');
+    if (_jobsRef != null) {
+      try {
+        await _jobsRef!.doc(jobId).set(app.toJson(), SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('[MarketplaceService] SDK firestore save error ($e), trying REST fallback');
+        await _saveViaRest(app);
+      }
+    } else {
       await _saveViaRest(app);
     }
 
@@ -154,6 +161,10 @@ class MarketplaceService {
             'secret_code': {'stringValue': app.secretCode!},
           if (app.secretHash != null)
             'secret_hash': {'stringValue': app.secretHash!},
+          if (app.teamName != null)
+            'team_name': {'stringValue': app.teamName!},
+          if (app.author != null)
+            'author': {'stringValue': app.author!},
           'status': {'stringValue': app.status},
           'created_at': {'integerValue': (app.createdAt.millisecondsSinceEpoch ~/ 1000).toString()},
         }
@@ -175,6 +186,7 @@ class MarketplaceService {
     int? difficulty,
     String? creator,
     String? currentAccountId,
+    Set<String>? userGroupNames,
   }) async {
     List<MarketplaceApplication> list = [];
 
@@ -185,6 +197,7 @@ class MarketplaceService {
         type: type,
         difficulty: difficulty,
         creator: creator,
+        viewer: currentAccountId,
       );
       if (nodeRes.success && nodeRes.data != null && nodeRes.data!.isNotEmpty) {
         for (final item in nodeRes.data!) {
@@ -197,9 +210,9 @@ class MarketplaceService {
     }
 
     // 2. If node list is empty or fallback needed, query Firestore
-    if (list.isEmpty) {
+    if (list.isEmpty && _jobsRef != null) {
       try {
-        Query<Map<String, dynamic>> query = _jobsRef;
+        Query<Map<String, dynamic>> query = _jobsRef!;
         if (category != null && category.isNotEmpty) {
           query = query.where('category', isEqualTo: category);
         }
@@ -219,14 +232,18 @@ class MarketplaceService {
       }
     }
 
-    // Inject cached secrets for current user's created jobs
+    // Inject cached secrets for current user's created jobs or team jobs
     final enriched = <MarketplaceApplication>[];
     for (final app in list) {
-      if (currentAccountId != null && app.creatorAccountId == currentAccountId && app.secretCode == null) {
-        final cached = await getCachedSecret(app.id);
-        if (cached != null) {
-          enriched.add(app.copyWith(secretCode: cached));
-          continue;
+      if (currentAccountId != null && app.secretCode == null) {
+        final isCreator = app.creatorAccountId == currentAccountId || app.author == currentAccountId;
+        final isTeamMember = app.teamName != null && (userGroupNames?.contains(app.teamName) ?? false);
+        if (isCreator || isTeamMember) {
+          final cached = await getCachedSecret(app.id);
+          if (cached != null) {
+            enriched.add(app.copyWith(secretCode: cached));
+            continue;
+          }
         }
       }
       enriched.add(app);
@@ -250,9 +267,30 @@ class MarketplaceService {
     if (res.success) {
       // Update firestore document status to COMPLETED
       try {
-        await _jobsRef.doc(jobId).set({
+        await _jobsRef?.doc(jobId).set({
           'status': 'COMPLETED',
           'worker': accountId,
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
+
+    return res;
+  }
+
+  /// Cancel job application and refund escrow
+  Future<ApiResult<Map<String, dynamic>>> cancelApplication({
+    required String accountId,
+    required String jobId,
+  }) async {
+    final res = await _nodeApi.cancelMarketplaceJob(
+      accountId: accountId,
+      jobId: jobId,
+    );
+
+    if (res.success) {
+      try {
+        await _jobsRef?.doc(jobId).set({
+          'status': 'CANCELLED',
         }, SetOptions(merge: true));
       } catch (_) {}
     }

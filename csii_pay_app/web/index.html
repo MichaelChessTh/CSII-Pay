@@ -31,8 +31,17 @@
 
   <title>CSII-Pay — Web3 Bank</title>
   <link rel="manifest" href="manifest.json">
+  <script>
+    // Auto-clean stale service workers and caches from previous builds
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var r of registrations) { r.unregister(); }
+      });
+    }
+  </script>
 </head>
 <body>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader

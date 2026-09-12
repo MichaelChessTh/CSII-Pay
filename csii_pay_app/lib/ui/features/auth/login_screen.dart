@@ -299,8 +299,8 @@ class _LoginTab extends StatelessWidget {
               controller: accountCtrl,
               style: GoogleFonts.outfit(color: AppColors.textPrimary),
               decoration: const InputDecoration(
-                labelText: 'Account ID / Username',
-                hintText: 'Enter your username or account ID',
+                labelText: 'Account ID / Username / Student ID',
+                hintText: 'Enter your username or Student ID',
                 prefixIcon: Icon(Icons.person_outline_rounded,
                     color: AppColors.brandTeal, size: 20),
               ),

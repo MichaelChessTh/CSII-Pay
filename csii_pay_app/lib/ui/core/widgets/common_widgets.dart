@@ -396,6 +396,7 @@ class AppTextField extends StatelessWidget {
     this.keyboardType,
     this.maxLines = 1,
     this.prefixIcon,
+    this.suffixIcon,
     this.onChanged,
   });
 
@@ -405,6 +406,7 @@ class AppTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final int maxLines;
   final Widget? prefixIcon;
+  final Widget? suffixIcon;
   final void Function(String)? onChanged;
 
   @override
@@ -430,6 +432,7 @@ class AppTextField extends StatelessWidget {
             hintText: hint,
             hintStyle: GoogleFonts.outfit(color: AppColors.textMuted, fontSize: 13),
             prefixIcon: prefixIcon,
+            suffixIcon: suffixIcon,
             filled: true,
             fillColor: AppColors.bgCard,
             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:csii_pay_app/domain/models/user_profile.dart';
 
 class UserProfileService {
-  final FirebaseFirestore _firestore;
+  final FirebaseFirestore? _firestore;
   static const String _restBaseUrl =
       'https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/users';
 
@@ -14,10 +14,10 @@ class UserProfileService {
   };
 
   UserProfileService({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+      : _firestore = firestore;
 
-  CollectionReference<Map<String, dynamic>> get _usersRef =>
-      _firestore.collection('users');
+  CollectionReference<Map<String, dynamic>>? get _usersRef =>
+      _firestore?.collection('users');
 
   /// Check if username is already taken in Cloud Firestore
   Future<bool> isUsernameAvailable(String username) async {
@@ -25,19 +25,21 @@ class UserProfileService {
     if (cleanUsername.isEmpty) return false;
     if (cleanUsername == '6958082456') return false;
 
-    try {
-      final doc = await _usersRef.doc(cleanUsername).get();
-      if (doc.exists) return false;
+    if (_usersRef != null) {
+      try {
+        final doc = await _usersRef!.doc(cleanUsername).get();
+        if (doc.exists) return false;
 
-      final query = await _usersRef
-          .where('username', isEqualTo: username.trim())
-          .limit(1)
-          .get();
-      return query.docs.isEmpty;
-    } catch (e) {
-      debugPrint('[UserProfileService] SDK isUsernameAvailable failed ($e), falling back to REST');
-      return await _checkAvailabilityViaRest(cleanUsername);
+        final query = await _usersRef!
+            .where('username', isEqualTo: username.trim())
+            .limit(1)
+            .get();
+        return query.docs.isEmpty;
+      } catch (e) {
+        debugPrint('[UserProfileService] SDK isUsernameAvailable failed ($e), falling back to REST');
+      }
     }
+    return await _checkAvailabilityViaRest(cleanUsername);
   }
 
   Future<bool> _checkAvailabilityViaRest(String cleanUsername) async {
@@ -61,12 +63,16 @@ class UserProfileService {
     final docId = profile.username.trim().toLowerCase();
     bool saved = false;
 
-    try {
-      await _usersRef.doc(docId).set(profile.toFirestore(), SetOptions(merge: true));
-      saved = true;
-      debugPrint('[UserProfileService] Saved profile via SDK for @$docId');
-    } catch (e) {
-      debugPrint('[UserProfileService] SDK save failed ($e), falling back to REST');
+    if (_usersRef != null) {
+      try {
+        await _usersRef!.doc(docId).set(profile.toFirestore(), SetOptions(merge: true));
+        saved = true;
+        debugPrint('[UserProfileService] Saved profile via SDK for @$docId');
+      } catch (e) {
+        debugPrint('[UserProfileService] SDK save failed ($e), falling back to REST');
+        saved = await _saveProfileViaRest(profile);
+      }
+    } else {
       saved = await _saveProfileViaRest(profile);
     }
 
@@ -126,28 +132,30 @@ class UserProfileService {
       );
     }
 
-    try {
-      final doc = await _usersRef.doc(cleanUsername).get();
-      if (doc.exists) {
-        final profile = UserProfile.fromFirestore(doc);
-        _nicknameCache[cleanUsername] = profile.nickname;
-        _nicknameCache[username.trim()] = profile.nickname;
-        return profile;
-      }
+    if (_usersRef != null) {
+      try {
+        final doc = await _usersRef!.doc(cleanUsername).get();
+        if (doc.exists) {
+          final profile = UserProfile.fromFirestore(doc);
+          _nicknameCache[cleanUsername] = profile.nickname;
+          _nicknameCache[username.trim()] = profile.nickname;
+          return profile;
+        }
 
-      // Try case-insensitive query if doc was stored under different case
-      final query = await _usersRef
-          .where('username', isEqualTo: username.trim())
-          .limit(1)
-          .get();
-      if (query.docs.isNotEmpty) {
-        final profile = UserProfile.fromFirestore(query.docs.first);
-        _nicknameCache[cleanUsername] = profile.nickname;
-        _nicknameCache[username.trim()] = profile.nickname;
-        return profile;
+        // Try case-insensitive query if doc was stored under different case
+        final query = await _usersRef!
+            .where('username', isEqualTo: username.trim())
+            .limit(1)
+            .get();
+        if (query.docs.isNotEmpty) {
+          final profile = UserProfile.fromFirestore(query.docs.first);
+          _nicknameCache[cleanUsername] = profile.nickname;
+          _nicknameCache[username.trim()] = profile.nickname;
+          return profile;
+        }
+      } catch (e) {
+        debugPrint('[UserProfileService] SDK get profile error ($e), trying REST fallback');
       }
-    } catch (e) {
-      debugPrint('[UserProfileService] SDK get profile error ($e), trying REST fallback');
     }
 
     // Direct REST Fallback (immune to SDK client offline state on web)
@@ -207,6 +215,89 @@ class UserProfileService {
       _nicknameCache[trimmed] = profile.nickname;
       return profile.nickname;
     }
+    return null;
+  }
+
+  final Map<String, String> _idToUsernameCache = {
+    '6958082456': '6958082456',
+  };
+
+  /// Resolves an identifier (Student ID, nickname, or username) to the canonical on-chain username
+  Future<String?> findUsernameByStudentIdOrNickname(String identifier) async {
+    final clean = identifier.trim().replaceFirst(RegExp(r'^@'), '');
+    if (clean.isEmpty) return null;
+    if (clean == '6958082456') return '6958082456';
+
+    if (_idToUsernameCache.containsKey(clean)) {
+      return _idToUsernameCache[clean];
+    }
+    if (_idToUsernameCache.containsKey(clean.toLowerCase())) {
+      return _idToUsernameCache[clean.toLowerCase()];
+    }
+
+    // 1. Check if it's already a direct username in Firestore
+    final direct = await getUserProfile(clean);
+    if (direct != null) {
+      _idToUsernameCache[clean] = direct.username;
+      _idToUsernameCache[direct.studentId] = direct.username;
+      _idToUsernameCache[direct.nickname.toLowerCase()] = direct.username;
+      return direct.username;
+    }
+
+    // 2. Query Firestore SDK by studentId or nickname
+    if (_usersRef != null) {
+      try {
+        final qStudent = await _usersRef!.where('studentId', isEqualTo: clean).limit(1).get();
+        if (qStudent.docs.isNotEmpty) {
+          final u = qStudent.docs.first.data()['username'] as String?;
+          if (u != null && u.isNotEmpty) {
+            _idToUsernameCache[clean] = u;
+            return u;
+          }
+        }
+        final qNick = await _usersRef!.where('nickname', isEqualTo: clean).limit(1).get();
+        if (qNick.docs.isNotEmpty) {
+          final u = qNick.docs.first.data()['username'] as String?;
+          if (u != null && u.isNotEmpty) {
+            _idToUsernameCache[clean] = u;
+            return u;
+          }
+        }
+      } catch (e) {
+        debugPrint('[UserProfileService] SDK findUsername error: $e');
+      }
+    }
+
+    // 3. Fallback: Query all users via Firestore REST and match studentId, nickname, or username
+    try {
+      final res = await http.get(Uri.parse(_restBaseUrl));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final docs = data['documents'] as List<dynamic>? ?? [];
+        final targetLower = clean.toLowerCase();
+        for (final d in docs) {
+          final fields = d['fields'] as Map<String, dynamic>?;
+          if (fields == null) continue;
+          final uName = fields['username']?['stringValue'] as String? ?? '';
+          final sId = fields['studentId']?['stringValue'] as String? ?? '';
+          final nick = fields['nickname']?['stringValue'] as String? ?? '';
+
+          if (sId.trim() == clean ||
+              nick.trim().toLowerCase() == targetLower ||
+              uName.trim().toLowerCase() == targetLower) {
+            if (uName.isNotEmpty) {
+              _idToUsernameCache[clean] = uName;
+              if (sId.isNotEmpty) _idToUsernameCache[sId] = uName;
+              if (nick.isNotEmpty) _idToUsernameCache[nick.toLowerCase()] = uName;
+              return uName;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[UserProfileService] REST findUsername error: $e');
+    }
+
     return null;
   }
 }

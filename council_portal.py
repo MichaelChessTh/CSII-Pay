@@ -44,10 +44,10 @@ def _get_ssl_context():
     except Exception:
         pass
     try:
-        return ssl.create_default_context()
+        return ssl._create_unverified_context()
     except Exception:
         pass
-    return ssl._create_unverified_context()
+    return None
 
 SSL_CTX = _get_ssl_context()
 
@@ -61,6 +61,17 @@ def get_node_accounts():
     except Exception as e:
         print(f"[!] Error fetching accounts from node: {e}")
         return {}
+
+def get_node_groups():
+    """Fetch group names from node to filter them out of student portal."""
+    try:
+        req = urllib.request.Request(f"{NODE_URL}/groups", headers={"User-Agent": "CouncilPortal/1.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return {g["name"] for g in data.get("groups", [])}
+    except Exception as e:
+        return set()
+
 
 def get_firebase_users():
     """Fetch registered users from Firestore REST API."""
@@ -76,9 +87,11 @@ def get_firebase_users():
                 doc_id = name_path.split("/")[-1] if "/" in name_path else ""
                 
                 username = fields.get("username", {}).get("stringValue", doc_id)
-                account_id = fields.get("accountId", {}).get("stringValue", fields.get("studentId", {}).get("stringValue", doc_id))
+                # In CSII-Pay, the on-chain account identifier is the student's username/handle or doc_id.
+                # Do not prioritize studentId as the account_id.
+                account_id = fields.get("accountId", {}).get("stringValue", username if username else doc_id)
                 full_name = fields.get("fullName", {}).get("stringValue", "N/A")
-                student_id = fields.get("studentId", {}).get("stringValue", doc_id)
+                student_id = fields.get("studentId", {}).get("stringValue", "N/A")
                 nickname = fields.get("nickname", {}).get("stringValue", username)
                 faculty = fields.get("faculty", {}).get("stringValue", "Chulalongkorn School of Integrated Innovation")
                 year = fields.get("year", {}).get("stringValue", fields.get("academicYear", {}).get("stringValue", "N/A"))
@@ -122,17 +135,17 @@ def update_firestore_verification(doc_id, is_verified=True, status="VERIFIED"):
         print(f"[!] Firestore patch error: {e}")
         return False
 
-def submit_on_chain_verification(target_account, status="VERIFIED", notes="Verified by Student Council Portal"):
+def submit_on_chain_verification(target_account, status="VERIFIED", notes="Verified by BAScii Faculty Portal"):
     """
     Sign and submit an ACCOUNT_VERIFY transaction on the blockchain.
-    Enforces security: Signed with the official Student Council Keypair.
+    Enforces security: Signed with the official Faculty Keypair.
     """
     try:
-        # 1. Derive Student Council Keypair
+        # 1. Derive Faculty Keypair
         privkey, pubkey = derive_account_keypair(GENESIS_PASSWORD, GENESIS_SALT)
 
         # 2. Get council nonce from node
-        acc_req = urllib.request.Request(f"{NODE_URL}/account/{GENESIS_ACCOUNT}", headers={"User-Agent": "CouncilPortal/1.0"})
+        acc_req = urllib.request.Request(f"{NODE_URL}/account/{GENESIS_ACCOUNT}", headers={"User-Agent": "FacultyPortal/1.0"})
         with urllib.request.urlopen(acc_req, timeout=3) as acc_resp:
             acc_data = json.loads(acc_resp.read().decode("utf-8"))
             nonce = acc_data.get("nonce", 0)
@@ -166,7 +179,7 @@ def submit_on_chain_verification(target_account, status="VERIFIED", notes="Verif
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTML TEMPLATES (Google-grade Dark Glassmorphism)
+# HTML TEMPLATES (BAScii Matte Onyx & Pure Gold Theme)
 # ─────────────────────────────────────────────────────────────────────────────
 def render_login_page(error=None):
     err_html = f'<div class="error-banner">{error}</div>' if error else ''
@@ -175,13 +188,13 @@ def render_login_page(error=None):
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Student Council Login — CSII-Pay</title>
+  <title>Faculty Portal Login — CSII-Pay</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      background: radial-gradient(circle at 50% 20%, #15102a 0%, #0a0815 100%);
-      color: #f1f5f9;
+      background: radial-gradient(circle at 50% 15%, #241D12 0%, #0B0C0E 100%);
+      color: #ECEFF8;
       font-family: 'Outfit', sans-serif;
       min-height: 100vh;
       display: flex;
@@ -190,68 +203,72 @@ def render_login_page(error=None):
       padding: 20px;
     }}
     .card {{
-      background: rgba(22, 19, 43, 0.75);
-      border: 1px solid rgba(139, 92, 246, 0.25);
-      backdrop-filter: blur(20px);
+      background: rgba(19, 21, 24, 0.85);
+      border: 1px solid rgba(200, 155, 39, 0.35);
+      backdrop-filter: blur(24px);
       border-radius: 24px;
-      padding: 40px;
+      padding: 42px;
       width: 100%;
-      max-width: 420px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 40px rgba(139, 92, 246, 0.15);
+      max-width: 440px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.65), 0 0 32px rgba(200, 155, 39, 0.12);
     }}
     .logo {{
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
       margin-bottom: 24px;
     }}
     .logo-icon {{
-      width: 48px;
-      height: 48px;
-      background: linear-gradient(135deg, #8b5cf6, #06b6d4);
-      border-radius: 14px;
+      width: 52px;
+      height: 52px;
+      background: linear-gradient(135deg, #F3C766, #C89B27);
+      border-radius: 16px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 24px;
+      font-size: 26px;
+      box-shadow: 0 4px 16px rgba(200, 155, 39, 0.35);
     }}
-    h1 {{ font-size: 22px; font-weight: 700; color: #ffffff; }}
-    p.sub {{ font-size: 13px; color: #94a3b8; margin-bottom: 28px; line-height: 1.5; }}
+    h1 {{ font-size: 22px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px; }}
+    p.sub {{ font-size: 13px; color: #9DA6B8; margin-bottom: 26px; line-height: 1.5; }}
     .form-group {{ margin-bottom: 20px; }}
-    label {{ display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }}
+    label {{ display: block; font-size: 11px; font-weight: 700; color: #F3C766; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.8px; }}
     input {{
       width: 100%;
-      background: rgba(10, 8, 21, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: #0B0C0E;
+      border: 1px solid rgba(200, 155, 39, 0.25);
       border-radius: 12px;
       padding: 14px 16px;
-      color: #fff;
+      color: #ECEFF8;
       font-size: 14px;
       font-family: inherit;
       outline: none;
       transition: all 0.2s;
     }}
     input:focus {{
-      border-color: #8b5cf6;
-      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+      border-color: #E2AE35;
+      box-shadow: 0 0 0 3px rgba(200, 155, 39, 0.2);
     }}
     .btn {{
       width: 100%;
-      background: linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%);
-      color: #fff;
+      background: linear-gradient(135deg, #F3C766 0%, #C89B27 100%);
+      color: #0B0C0E;
       border: none;
-      padding: 14px;
+      padding: 15px;
       border-radius: 12px;
       font-size: 15px;
-      font-weight: 700;
+      font-weight: 800;
+      letter-spacing: 0.3px;
       cursor: pointer;
       margin-top: 10px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 16px rgba(200, 155, 39, 0.3);
     }}
-    .btn:hover {{ opacity: 0.95; }}
+    .btn:hover {{ opacity: 0.95; transform: translateY(-1px); }}
     .error-banner {{
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
+      background: rgba(255, 69, 96, 0.15);
+      border: 1px solid rgba(255, 69, 96, 0.35);
+      color: #FFA5B4;
       padding: 12px 14px;
       border-radius: 10px;
       font-size: 13px;
@@ -260,43 +277,44 @@ def render_login_page(error=None):
     .demo-hint {{
       margin-top: 24px;
       padding: 12px;
-      background: rgba(255,255,255,0.04);
+      background: rgba(200, 155, 39, 0.06);
+      border: 1px solid rgba(200, 155, 39, 0.15);
       border-radius: 10px;
       font-size: 12px;
-      color: #94a3b8;
+      color: #9DA6B8;
       text-align: center;
       line-height: 1.4;
     }}
-    .demo-hint code {{ color: #a78bfa; font-weight: 600; }}
+    .demo-hint code {{ color: #F3C766; font-weight: 700; }}
   </style>
 </head>
 <body>
   <div class="card">
     <div class="logo">
-      <div class="logo-icon">🏛️</div>
+      <div class="logo-icon">🎓</div>
       <div>
-        <h1>Student Council</h1>
-        <div style="font-size: 12px; color: #8b5cf6; font-weight: 600;">Verification Portal</div>
+        <h1>BAScii Faculty Portal</h1>
+        <div style="font-size: 12px; color: #E2AE35; font-weight: 600;">Chulalongkorn University &bull; CSII</div>
       </div>
     </div>
-    <p class="sub">Log in with Council Operator credentials to inspect and verify newly created student accounts to unlock their 100 BDP signup rewards.</p>
+    <p class="sub">Authorized Faculty Administration Portal. Inspect registered student dossiers, verify academic credentials, and approve Character Points (BDP) bonuses.</p>
     
     {err_html}
 
     <form method="POST" action="/login">
       <div class="form-group">
-        <label>Council Member ID</label>
+        <label>Faculty Member ID</label>
         <input type="text" name="account_id" value="6958082456" required autocomplete="username">
       </div>
       <div class="form-group">
-        <label>Security Password</label>
-        <input type="password" name="password" placeholder="Enter Council Password" required autocomplete="current-password">
+        <label>Security Key</label>
+        <input type="password" name="password" placeholder="Enter Faculty Security Key" required autocomplete="current-password">
       </div>
-      <button type="submit" class="btn">Sign In to Council Portal</button>
+      <button type="submit" class="btn">Sign In to Faculty Portal</button>
     </form>
 
     <div class="demo-hint">
-      <strong>Council Key:</strong> ID: <code>6958082456</code> &bull; Password: <code>123</code>
+      <strong>Faculty Access:</strong> ID: <code>6958082456</code> &bull; Key: <code>123</code>
     </div>
   </div>
 </body>
@@ -307,18 +325,18 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
     
     rows_html = ""
     if not students:
-        rows_html = '<tr><td colspan="7" style="text-align:center; padding: 40px; color: #94a3b8;">No registered student accounts matching your filter.</td></tr>'
+        rows_html = '<tr><td colspan="7" style="text-align:center; padding: 40px; color: #9DA6B8;">No registered student accounts matching your filter.</td></tr>'
     else:
         for s in students:
             is_ver = s["is_verified"]
-            status_badge = '<span class="badge verified">✓ Verified</span>' if is_ver else '<span class="badge pending">⏳ Pending</span>'
+            status_badge = '<span class="badge verified">✓ Verified Scholar</span>' if is_ver else '<span class="badge pending">⏳ Pending Review</span>'
             
             action_btn = f'''
             <form method="POST" action="/verify" style="display:inline-block; margin-right: 6px;">
               <input type="hidden" name="account_id" value="{s['account_id']}">
               <input type="hidden" name="doc_id" value="{s['doc_id']}">
               <input type="hidden" name="decision" value="VERIFIED">
-              <button type="submit" class="action-btn verify-btn">✓ Verify & Unlock BDP</button>
+              <button type="submit" class="action-btn verify-btn">✓ Approve & Unlock BDP</button>
             </form>
             <form method="POST" action="/verify" style="display:inline-block;">
               <input type="hidden" name="account_id" value="{s['account_id']}">
@@ -326,28 +344,31 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
               <input type="hidden" name="decision" value="REJECTED">
               <button type="submit" class="action-btn reject-btn" onclick="return confirm('Reject account @{s['account_id']}?');">✕ Reject</button>
             </form>
-            ''' if not is_ver else '<span style="color: #10b981; font-weight: 600; font-size: 12px;">Unlocked (Spendable)</span>'
+            ''' if not is_ver else '<span style="color: #00E676; font-weight: 700; font-size: 12px;">✓ 100 BDP Unlocked</span>'
 
             rows_html += f"""
             <tr>
               <td>
-                <div style="font-weight: 700; color: #fff;">{s['full_name']}</div>
-                <div style="font-size: 12px; color: #94a3b8;">@{s['account_id']} &bull; Nick: {s['nickname']}</div>
+                <div style="font-weight: 700; color: #FFFFFF; font-size: 14px;">{s['full_name']}</div>
+                <div style="font-size: 12px; color: #9DA6B8;">@{s['account_id']} &bull; Nick: {s['nickname']}</div>
               </td>
-              <td><code style="color: #a78bfa; font-weight: 600;">{s['student_id']}</code></td>
+              <td><code class="student-id-badge">{s['student_id']}</code></td>
               <td>{status_badge}</td>
               <td>
-                <div style="font-weight: 700; color: #38bdf8;">{s['csp_balance']:.2f} CSP</div>
+                <div style="font-weight: 700; color: #E2AE35;">{s['csp_balance']:.2f} CSP</div>
+                <div style="font-size: 11px; color: #9DA6B8;">Service Points</div>
               </td>
               <td>
-                <div style="font-weight: 700; color: #a78bfa;">{s['bdp_balance']:.2f} BDP</div>
-                <div style="font-size: 11px; color: {'#f59e0b' if s['frozen_bdp'] > 0 else '#64748b'};">
+                <div class="bdp-badge">
+                  <span>{s['bdp_balance']:.2f} BDP</span>
+                </div>
+                <div style="font-size: 11px; color: {'#E2AE35' if s['frozen_bdp'] > 0 else '#5A6478'}; margin-top: 3px;">
                   🔒 {s['frozen_bdp']:.0f} Frozen
                 </div>
               </td>
-              <td style="font-size: 11px; color: #64748b;">
-                Node: {s['on_chain_status']}<br>
-                Nonce: {s['on_chain_nonce']}
+              <td style="font-size: 11px; color: #9DA6B8;">
+                Status: <strong style="color: #ECEFF8;">{s['on_chain_status']}</strong><br>
+                Nonce: #{s['on_chain_nonce']}
               </td>
               <td style="text-align: right;">{action_btn}</td>
             </tr>
@@ -358,20 +379,21 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Council Verification Portal — CSII-Pay</title>
+  <meta http-equiv="refresh" content="12">
+  <title>Faculty Verification Portal — CSII-Pay</title>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      background: radial-gradient(circle at 50% 10%, #15102a 0%, #0a0815 100%);
-      color: #f1f5f9;
+      background: radial-gradient(circle at 50% 10%, #1F190E 0%, #0B0C0E 100%);
+      color: #ECEFF8;
       font-family: 'Outfit', sans-serif;
       min-height: 100vh;
       padding-bottom: 60px;
     }}
     .nav {{
-      background: rgba(18, 14, 36, 0.85);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(19, 21, 24, 0.90);
+      border-bottom: 1px solid rgba(200, 155, 39, 0.2);
       backdrop-filter: blur(16px);
       padding: 16px 32px;
       display: flex;
@@ -381,37 +403,57 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       top: 0;
       z-index: 50;
     }}
-    .nav-brand {{ display: flex; align-items: center; gap: 12px; }}
+    .nav-brand {{ display: flex; align-items: center; gap: 14px; }}
     .nav-icon {{
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+      width: 42px;
+      height: 42px;
+      background: linear-gradient(135deg, #F3C766, #C89B27);
       border-radius: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 20px;
+      font-size: 22px;
+      box-shadow: 0 4px 12px rgba(200, 155, 39, 0.3);
     }}
-    .nav-title {{ font-size: 18px; font-weight: 700; }}
+    .nav-title {{ font-size: 18px; font-weight: 800; color: #FFFFFF; }}
     .nav-user {{
       display: flex;
       align-items: center;
       gap: 16px;
       font-size: 13px;
     }}
+    .auto-refresh-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 230, 118, 0.12);
+      border: 1px solid rgba(0, 230, 118, 0.3);
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      color: #00E676;
+      font-weight: 600;
+    }}
+    .pulse-dot {{
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00E676;
+      box-shadow: 0 0 8px #00E676;
+    }}
     .logout-btn {{
-      background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.3);
+      background: rgba(255, 69, 96, 0.15);
+      color: #FF6B81;
+      border: 1px solid rgba(255, 69, 96, 0.3);
       padding: 8px 14px;
       border-radius: 8px;
       text-decoration: none;
-      font-weight: 600;
+      font-weight: 700;
       transition: background 0.15s;
     }}
-    .logout-btn:hover {{ background: rgba(239, 68, 68, 0.25); }}
+    .logout-btn:hover {{ background: rgba(255, 69, 96, 0.25); }}
     .container {{
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 32px auto;
       padding: 0 24px;
     }}
@@ -422,14 +464,14 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       margin-bottom: 28px;
     }}
     .stat-card {{
-      background: rgba(22, 19, 43, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #131518;
+      border: 1px solid rgba(200, 155, 39, 0.2);
       border-radius: 18px;
       padding: 20px;
-      backdrop-filter: blur(12px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     }}
-    .stat-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }}
-    .stat-val {{ font-size: 28px; font-weight: 800; margin-top: 6px; }}
+    .stat-label {{ font-size: 11px; color: #9DA6B8; text-transform: uppercase; font-weight: 700; letter-spacing: 0.8px; }}
+    .stat-val {{ font-size: 30px; font-weight: 800; margin-top: 6px; letter-spacing: -0.5px; }}
     .search-filter-row {{
       display: flex;
       justify-content: space-between;
@@ -440,8 +482,8 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
     }}
     .filter-tabs {{
       display: flex;
-      background: rgba(22, 19, 43, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #131518;
+      border: 1px solid rgba(200, 155, 39, 0.2);
       padding: 4px;
       border-radius: 12px;
     }}
@@ -451,12 +493,13 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       text-decoration: none;
       font-size: 13px;
       font-weight: 600;
-      color: #94a3b8;
+      color: #9DA6B8;
       transition: all 0.15s;
     }}
     .tab-btn.active {{
-      background: #8b5cf6;
-      color: #fff;
+      background: linear-gradient(135deg, #F3C766, #C89B27);
+      color: #0B0C0E;
+      font-weight: 800;
     }}
     .search-box {{
       position: relative;
@@ -464,22 +507,22 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
     }}
     .search-box input {{
       width: 100%;
-      background: rgba(22, 19, 43, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: #131518;
+      border: 1px solid rgba(200, 155, 39, 0.2);
       border-radius: 12px;
       padding: 10px 16px;
-      color: #fff;
+      color: #ECEFF8;
       font-size: 13px;
       font-family: inherit;
       outline: none;
     }}
-    .search-box input:focus {{ border-color: #8b5cf6; }}
+    .search-box input:focus {{ border-color: #E2AE35; box-shadow: 0 0 0 3px rgba(200, 155, 39, 0.15); }}
     .table-container {{
-      background: rgba(22, 19, 43, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #131518;
+      border: 1px solid rgba(200, 155, 39, 0.2);
       border-radius: 20px;
       overflow: hidden;
-      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.5);
     }}
     table {{
       width: 100%;
@@ -487,22 +530,22 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       text-align: left;
     }}
     th {{
-      background: rgba(14, 11, 28, 0.8);
+      background: #0B0C0E;
       padding: 14px 20px;
       font-size: 11px;
       text-transform: uppercase;
       font-weight: 700;
-      color: #94a3b8;
-      letter-spacing: 0.5px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      color: #F3C766;
+      letter-spacing: 0.6px;
+      border-bottom: 1px solid rgba(200, 155, 39, 0.2);
     }}
     td {{
       padding: 16px 20px;
       font-size: 13px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       vertical-align: middle;
     }}
-    tr:hover td {{ background: rgba(255, 255, 255, 0.02); }}
+    tr:hover td {{ background: rgba(200, 155, 39, 0.03); }}
     .badge {{
       display: inline-flex;
       align-items: center;
@@ -512,39 +555,61 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       font-weight: 700;
     }}
     .badge.pending {{
-      background: rgba(245, 158, 11, 0.15);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.3);
+      background: rgba(226, 174, 53, 0.15);
+      color: #E2AE35;
+      border: 1px solid rgba(226, 174, 53, 0.35);
     }}
     .badge.verified {{
-      background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
+      background: rgba(0, 230, 118, 0.15);
+      color: #00E676;
+      border: 1px solid rgba(0, 230, 118, 0.35);
     }}
-    .action-btn {{
-      padding: 6px 12px;
-      border-radius: 8px;
+    .student-id-badge {{
+      font-family: 'JetBrains Mono', monospace;
+      color: #F3C766;
+      background: rgba(200, 155, 39, 0.1);
+      border: 1px solid rgba(200, 155, 39, 0.25);
+      padding: 3px 8px;
+      border-radius: 6px;
       font-size: 12px;
       font-weight: 700;
+    }}
+    .bdp-badge {{
+      display: inline-flex;
+      align-items: center;
+      background: #14120E;
+      border: 1px solid #D4AF37;
+      border-radius: 8px;
+      padding: 4px 10px;
+      color: #FFF7E2;
+      font-weight: 800;
+      box-shadow: 0 2px 8px rgba(212, 175, 55, 0.2);
+    }}
+    .action-btn {{
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 800;
       border: none;
       cursor: pointer;
       font-family: inherit;
+      transition: all 0.15s;
     }}
     .verify-btn {{
-      background: #10b981;
-      color: #fff;
+      background: linear-gradient(135deg, #00E676 0%, #059669 100%);
+      color: #0B0C0E;
     }}
-    .verify-btn:hover {{ background: #059669; }}
+    .verify-btn:hover {{ opacity: 0.95; transform: scale(1.02); }}
     .reject-btn {{
-      background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.3);
+      background: rgba(255, 69, 96, 0.15);
+      color: #FF6B81;
+      border: 1px solid rgba(255, 69, 96, 0.35);
     }}
-    .reject-btn:hover {{ background: rgba(239, 68, 68, 0.3); }}
+    .reject-btn:hover {{ background: rgba(255, 69, 96, 0.25); }}
     .toast-msg {{
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(6, 182, 212, 0.2));
-      border: 1px solid rgba(139, 92, 246, 0.4);
-      color: #e2e8f0;
+      background: rgba(200, 155, 39, 0.15);
+      border: 1px solid #C89B27;
+      color: #FFF7E2;
       padding: 14px 20px;
       border-radius: 14px;
       margin-bottom: 24px;
@@ -556,14 +621,18 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
 <body>
   <div class="nav">
     <div class="nav-brand">
-      <div class="nav-icon">🏛️</div>
+      <div class="nav-icon">🎓</div>
       <div>
-        <div class="nav-title">CSII-Pay Student Council Verification</div>
-        <div style="font-size: 11px; color: #8b5cf6;">Official On-Chain Validator Portal</div>
+        <div class="nav-title">BAScii Faculty Verification Portal</div>
+        <div style="font-size: 11px; color: #E2AE35;">Official Chulalongkorn University &bull; CSII Academic Validator</div>
       </div>
     </div>
     <div class="nav-user">
-      <div>Council ID: <code style="color: #a78bfa; font-weight: 700;">{GENESIS_ACCOUNT}</code> (Authorized)</div>
+      <div class="auto-refresh-badge">
+        <span class="pulse-dot"></span>
+        <span id="refresh-timer">Auto-refresh: 12s</span>
+      </div>
+      <div>Faculty Dean: <code style="color: #F3C766; font-weight: 700;">{GENESIS_ACCOUNT}</code></div>
       <a href="/logout" class="logout-btn">Log Out</a>
     </div>
   </div>
@@ -573,23 +642,23 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
 
     <div class="stats-row">
       <div class="stat-card">
-        <div class="stat-label">Pending Verifications</div>
-        <div class="stat-val" style="color: #f59e0b;">{pending_count}</div>
+        <div class="stat-label">Pending Review</div>
+        <div class="stat-val" style="color: #E2AE35;">{pending_count}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Verified Students</div>
-        <div class="stat-val" style="color: #10b981;">{verified_count}</div>
+        <div class="stat-label">Verified Scholars</div>
+        <div class="stat-val" style="color: #00E676;">{verified_count}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Total Accounts</div>
-        <div class="stat-val" style="color: #a78bfa;">{total_count}</div>
+        <div class="stat-label">Total Student Accounts</div>
+        <div class="stat-val" style="color: #F3C766;">{total_count}</div>
       </div>
     </div>
 
     <div class="search-filter-row">
       <div class="filter-tabs">
         <a href="/?filter=pending" class="tab-btn {'active' if current_filter == 'pending' else ''}">Pending Review ({pending_count})</a>
-        <a href="/?filter=verified" class="tab-btn {'active' if current_filter == 'verified' else ''}">Verified ({verified_count})</a>
+        <a href="/?filter=verified" class="tab-btn {'active' if current_filter == 'verified' else ''}">Verified Scholars ({verified_count})</a>
         <a href="/?filter=all" class="tab-btn {'active' if current_filter == 'all' else ''}">All Registered ({total_count})</a>
       </div>
       <form method="GET" action="/" class="search-box">
@@ -602,13 +671,13 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       <table>
         <thead>
           <tr>
-            <th>Student / Account</th>
+            <th>Student Dossier</th>
             <th>Chula ID</th>
             <th>Verification</th>
-            <th>CSP (Base)</th>
-            <th>BDP (Bonus)</th>
+            <th>Service Points (CSP)</th>
+            <th>Character Points (BDP)</th>
             <th>On-Chain Status</th>
-            <th style="text-align: right;">Action</th>
+            <th style="text-align: right;">Administrative Action</th>
           </tr>
         </thead>
         <tbody>
@@ -617,6 +686,22 @@ def render_dashboard_page(students, pending_count, verified_count, total_count, 
       </table>
     </div>
   </div>
+  <script>
+    let sec = 12;
+    const t = document.getElementById('refresh-timer');
+    setInterval(function() {{
+      const active = document.activeElement;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT')) {{
+        if (t) t.innerText = 'Paused (Typing)';
+        return;
+      }}
+      sec--;
+      if (t) t.innerText = 'Auto-refresh: ' + sec + 's';
+      if (sec <= 0) {{
+        window.location.reload();
+      }}
+    }}, 1000);
+  </script>
 </body>
 </html>"""
 
@@ -686,13 +771,18 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
         # 1. Fetch data
         fb_users = get_firebase_users()
         node_accounts = get_node_accounts()
+        node_groups = get_node_groups()
 
         # Combine
         combined = {}
         for fb in fb_users:
-            combined[fb["account_id"]] = {
+            primary_key = fb["account_id"] or fb["username"] or fb["doc_id"]
+            if primary_key in node_groups or fb.get("username") in node_groups:
+                continue
+            combined[primary_key] = {
                 "doc_id": fb["doc_id"],
-                "account_id": fb["account_id"],
+                "username": fb.get("username", primary_key),
+                "account_id": primary_key,
                 "full_name": fb["full_name"],
                 "student_id": fb["student_id"],
                 "nickname": fb["nickname"],
@@ -709,18 +799,35 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
             }
 
         for acc_id, node_acc in node_accounts.items():
-            if acc_id == GENESIS_ACCOUNT:
+            if acc_id == GENESIS_ACCOUNT or acc_id in node_groups or node_acc.get("is_group_account"):
                 continue
+
+            # Robust match: direct key match or check account_id, username, doc_id, or student_id
+            matched_key = None
             if acc_id in combined:
-                combined[acc_id]["csp_balance"] = node_acc.get("balances", {}).get("CSP", 0.0)
-                combined[acc_id]["bdp_balance"] = node_acc.get("balances", {}).get("BDP", 0.0)
-                combined[acc_id]["frozen_bdp"] = node_acc.get("frozen_balances", {}).get("BDP", 0.0)
-                combined[acc_id]["on_chain_nonce"] = node_acc.get("nonce", 0)
-                combined[acc_id]["on_chain_status"] = "ON-CHAIN"
-                combined[acc_id]["is_verified"] = node_acc.get("is_verified", combined[acc_id]["is_verified"])
+                matched_key = acc_id
+            else:
+                for k, s in combined.items():
+                    if acc_id in (s.get("account_id"), s.get("username"), s.get("doc_id"), s.get("student_id")):
+                        matched_key = k
+                        break
+
+            if matched_key:
+                entry = combined[matched_key]
+                entry["account_id"] = acc_id  # ensure on-chain account ID is used for actions
+                entry["csp_balance"] = node_acc.get("balances", {}).get("CSP", 0.0)
+                entry["bdp_balance"] = node_acc.get("balances", {}).get("BDP", 0.0)
+                entry["frozen_bdp"] = node_acc.get("frozen_balances", {}).get("BDP", 0.0)
+                entry["on_chain_nonce"] = node_acc.get("nonce", 0)
+                entry["on_chain_status"] = "ON-CHAIN"
+                entry["is_verified"] = node_acc.get("is_verified", entry["is_verified"])
+                if matched_key != acc_id:
+                    del combined[matched_key]
+                    combined[acc_id] = entry
             else:
                 combined[acc_id] = {
                     "doc_id": acc_id,
+                    "username": acc_id,
                     "account_id": acc_id,
                     "full_name": f"Account @{acc_id}",
                     "student_id": acc_id if acc_id.isdigit() else "N/A",
@@ -785,7 +892,7 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
                 ACTIVE_SESSIONS.add(token)
                 self._set_cookie_and_redirect(token, "/")
             else:
-                html = render_login_page(error="Invalid Council credentials. Authorized ID: 6958082456")
+                html = render_login_page(error="Invalid Faculty credentials. Authorized Faculty ID: 6958082456")
                 self.send_response(401)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
@@ -809,7 +916,7 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
 
             # 1. On-chain verification
             ok, msg = submit_on_chain_verification(account_id, decision)
-            print(f"[CouncilPortal] On-chain verification for @{account_id}: ok={ok}, msg={msg}")
+            print(f"[FacultyPortal] On-chain verification for @{account_id}: ok={ok}, msg={msg}")
 
             # 2. Update Firestore
             if doc_id:
@@ -824,7 +931,7 @@ class CouncilPortalHandler(BaseHTTPRequestHandler):
 
 def run_server(port=5050):
     server = ThreadingHTTPServer(("0.0.0.0", port), CouncilPortalHandler)
-    print(f"[*] CSII Student Council Portal listening on http://127.0.0.1:{port}...")
+    print(f"[*] BAScii Faculty Verification Portal listening on http://127.0.0.1:{port}...")
     server.serve_forever()
 
 if __name__ == "__main__":

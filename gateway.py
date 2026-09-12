@@ -1,21 +1,54 @@
-#!/usr/bin/env python3
-"""
-CSII-Pay Multi-Node Gateway & Load Balancer
-Listens on port 8080 and proxies traffic to healthy local nodes randomly on each request.
-Adds CORS headers and detailed routing headers for client visibility.
-"""
-
+import os
 import sys
 import time
 import random
 import threading
+import mimetypes
 import urllib.request
 import urllib.error
 import urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 DEFAULT_CANDIDATE_PORTS = [8000, 8001, 8002, 8003]
 GATEWAY_PORT = 8080
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.path.join(BASE_DIR, "csii_pay_app", "build", "web")
+mimetypes.init()
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("application/wasm", ".wasm")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("font/ttf", ".ttf")
+mimetypes.add_type("font/otf", ".otf")
+mimetypes.add_type("font/woff", ".woff")
+mimetypes.add_type("font/woff2", ".woff2")
+
+API_ENDPOINTS = (
+    "/status",
+    "/account",
+    "/accounts",
+    "/operator",
+    "/transactions",
+    "/activity",
+    "/marketplace",
+    "/groups",
+    "/mempool",
+    "/gateway",
+    "/peers",
+    "/register",
+    "/login",
+    "/broadcast",
+    "/escrow",
+    "/orders",
+    "/submit_transaction",
+    "/chain",
+    "/balance",
+    "/order",
+    "/tx",
+    "/contracts",
+    "/contract",
+)
 
 class NodeRegistry:
     def __init__(self, candidate_ports):
@@ -77,15 +110,87 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Access-Control-Expose-Headers", "X-Routed-Node, X-Gateway")
 
+    def _is_api_path(self, path):
+        clean = path.split("?")[0]
+        return any(clean == ep or clean.startswith(ep + "/") or clean.startswith(ep + "?") for ep in API_ENDPOINTS)
+
+    def _serve_static_file(self, file_path):
+        try:
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+            with open(file_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(content)
+            return True
+        except Exception as e:
+            print(f"[Gateway] Error serving {file_path}: {e}")
+            return False
+
     def do_OPTIONS(self):
         self.send_response(200)
         self._send_cors_headers()
         self.end_headers()
 
+    def do_HEAD(self):
+        if self._is_api_path(self.path) or not os.path.exists(WEB_DIR):
+            self._proxy_request("HEAD")
+            return
+
+        rel_path = urllib.parse.unquote(self.path.split("?")[0]).lstrip("/")
+        if not rel_path:
+            rel_path = "index.html"
+        target_file = os.path.join(WEB_DIR, rel_path)
+        if not os.path.isfile(target_file):
+            target_file = os.path.join(WEB_DIR, "index.html")
+
+        if os.path.isfile(target_file):
+            mime_type, _ = mimetypes.guess_type(target_file)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+            file_size = os.path.getsize(target_file)
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self._send_cors_headers()
+            self.end_headers()
+        else:
+            self._proxy_request("HEAD")
+
     def do_GET(self):
         if self.path == "/gateway/status":
             self._handle_gateway_status()
             return
+
+        # If it's an API route or no web bundle exists, proxy to healthy node
+        if self._is_api_path(self.path) or not os.path.exists(WEB_DIR):
+            self._proxy_request("GET")
+            return
+
+        # Otherwise serve Flutter Web static assets or SPA index.html
+        rel_path = urllib.parse.unquote(self.path.split("?")[0]).lstrip("/")
+        if not rel_path:
+            rel_path = "index.html"
+        target_file = os.path.join(WEB_DIR, rel_path)
+
+        if os.path.isfile(target_file):
+            self._serve_static_file(target_file)
+            return
+
+        # SPA Fallback for browser client routing
+        index_file = os.path.join(WEB_DIR, "index.html")
+        if os.path.isfile(index_file):
+            self._serve_static_file(index_file)
+            return
+
+        # Fallback to node proxy
         self._proxy_request("GET")
 
     def do_POST(self):
@@ -190,7 +295,7 @@ def run_gateway(port=GATEWAY_PORT, candidate_ports=None):
     print(f"Initial healthy nodes: {registry.get_all_healthy()}")
 
     GatewayHandler.registry = registry
-    server = HTTPServer(("0.0.0.0", port), GatewayHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), GatewayHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

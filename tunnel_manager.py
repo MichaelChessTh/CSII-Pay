@@ -33,28 +33,48 @@ def _get_ssl_context():
     except Exception:
         pass
     try:
-        return ssl.create_default_context()
+        return ssl._create_unverified_context()
     except Exception:
         pass
-    return ssl._create_unverified_context()
+    return None
 
 FIRESTORE_GATEWAY_DOC = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/gateway"
 GATEWAY_PORT = 8080
+COUNCIL_PORT = 5050
+DEFAULT_CUSTOM_DOMAIN = "csiipay.app"
+
+def get_local_ip() -> str:
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
 
 class TunnelManager:
-    def __init__(self):
+    def __init__(self, custom_domain=DEFAULT_CUSTOM_DOMAIN, token=None, force_quick=False):
+        self.custom_domain = custom_domain
+        self.token = token
+        self.force_quick = force_quick
         self.tunnel_process = None
         self.gateway_process = None
+        self.portal_process = None
         self.current_url = None
         self.running = True
         self.ssl_ctx = _get_ssl_context()
 
     def publish_to_firestore(self, url, status="online"):
         try:
+            lan_ip = get_local_ip()
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
             payload = json.dumps({
                 "fields": {
                     "url": {"stringValue": url},
+                    "lan_url": {"stringValue": f"http://{lan_ip}:8000"},
                     "updated_at": {"timestampValue": now_iso},
                     "status": {"stringValue": status}
                 }
@@ -103,9 +123,37 @@ class TunnelManager:
         for _ in range(10):
             time.sleep(0.5)
             if self.is_gateway_running():
-                print(f"[{time.strftime('%H:%M:%S')}] ✓ Gateway started successfully")
+                print(f"[{time.strftime('%H:%M:%S')}] ✓ Gateway started successfully (http://127.0.0.1:{GATEWAY_PORT})")
                 return
         print(f"[{time.strftime('%H:%M:%S')}] Warning: Gateway took longer than expected to initialize")
+
+    def is_portal_running(self):
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{COUNCIL_PORT}/")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                return resp.status in (200, 302)
+        except Exception:
+            return False
+
+    def start_portal(self):
+        if self.is_portal_running():
+            print(f"[{time.strftime('%H:%M:%S')}] Council Portal already running on port {COUNCIL_PORT}")
+            return
+        print(f"[{time.strftime('%H:%M:%S')}] Launching council_portal.py on port {COUNCIL_PORT} (for faculty.csiipay.app)...")
+        env = dict(os.environ)
+        env["NODE_URL"] = f"http://127.0.0.1:{GATEWAY_PORT}"
+        self.portal_process = subprocess.Popen(
+            [sys.executable, "council_portal.py"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        for _ in range(10):
+            time.sleep(0.5)
+            if self.is_portal_running():
+                print(f"[{time.strftime('%H:%M:%S')}] ✓ Council Portal started successfully (http://127.0.0.1:{COUNCIL_PORT})")
+                return
+        print(f"[{time.strftime('%H:%M:%S')}] Warning: Council Portal took longer than expected to initialize")
 
     def _heartbeat_loop(self):
         while self.running:
@@ -115,6 +163,7 @@ class TunnelManager:
 
     def start_tunnel(self):
         self.start_gateway()
+        self.start_portal()
 
         cloudflared_bin = "cloudflared"
         # Check standard brew location if not in PATH
@@ -124,6 +173,69 @@ class TunnelManager:
             else:
                 print("Error: cloudflared binary not found! Install via: brew install cloudflared")
                 return
+
+        # Check for token in file if not passed
+        if not self.token and os.path.exists("scratch/cloudflare_token.txt"):
+            try:
+                with open("scratch/cloudflare_token.txt", "r") as f:
+                    tok = f.read().strip()
+                    if tok:
+                        self.token = tok
+            except Exception:
+                pass
+
+        if self.token and not self.force_quick:
+            # Dedicated Custom Domain Tunnel via Cloudflare Token
+            print("\n" + "=" * 65)
+            print("⚡ CLOUDFLARE MULTI-HOSTNAME CUSTOM TUNNEL ⚡")
+            print("Target Ingress Routes:")
+            print(f"  1. https://csiipay.app        --> http://127.0.0.1:{GATEWAY_PORT} (Web App + Gateway)")
+            print(f"  2. https://api.csiipay.app    --> http://127.0.0.1:{GATEWAY_PORT} (Gateway API)")
+            print(f"  3. https://faculty.csiipay.app--> http://127.0.0.1:{COUNCIL_PORT} (Council Portal)")
+            print("=" * 65 + "\n")
+
+            cmd = [cloudflared_bin, "tunnel", "run", "--token", self.token]
+            self.current_url = f"https://{self.custom_domain}"
+            os.makedirs("scratch", exist_ok=True)
+            with open("scratch/gateway_url.txt", "w") as f:
+                f.write(self.current_url + "\n")
+
+            # Publish custom domain to Firestore immediately
+            self.publish_to_firestore(self.current_url, status="online")
+
+            # Start background heartbeat thread
+            hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+            hb_thread.start()
+
+            self.tunnel_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            try:
+                for line in self.tunnel_process.stdout:
+                    line_str = line.strip()
+                    if "Registered tunnel connection" in line_str or "Connection" in line_str and "registered" in line_str:
+                        print(f"[{time.strftime('%H:%M:%S')}] Cloudflare: {line_str}")
+            except KeyboardInterrupt:
+                print("\nShutting down tunnel...")
+            finally:
+                self.shutdown()
+            return
+
+        # Fallback / Quick Tunnel Mode
+        if not self.token:
+            print("\n" + "=" * 68)
+            print("⚡ NOTICE: CUSTOM DOMAIN & HOSTNAME SETUP INSTRUCTIONS ⚡")
+            print("In Cloudflare Dashboard -> Zero Trust -> Networks -> Tunnels:")
+            print("Under your tunnel -> Public Hostnames tab, configure:")
+            print(f"  1. csiipay.app         --> Service: HTTP://localhost:{GATEWAY_PORT} (Flutter Web)")
+            print(f"  2. api.csiipay.app     --> Service: HTTP://localhost:{GATEWAY_PORT} (API Proxy)")
+            print(f"  3. faculty.csiipay.app --> Service: HTTP://localhost:{COUNCIL_PORT} (Council Portal)")
+            print("=" * 68)
+            print("[*] Starting Quick Tunnel in the meantime...\n")
 
         print(f"[{time.strftime('%H:%M:%S')}] Starting Cloudflare Quick Tunnel to http://127.0.0.1:{GATEWAY_PORT}...")
         cmd = [cloudflared_bin, "tunnel", "--url", f"http://127.0.0.1:{GATEWAY_PORT}"]
@@ -164,7 +276,6 @@ class TunnelManager:
 
                         # Publish to Cloud Firestore
                         self.publish_to_firestore(self.current_url, status="online")
-                # Suppress spammy lines, print key ones
                 if "Registered tunnel connection" in line_str or "Connection" in line_str and "registered" in line_str:
                     print(f"[{time.strftime('%H:%M:%S')}] Cloudflare: {line_str}")
         except KeyboardInterrupt:
@@ -185,11 +296,20 @@ class TunnelManager:
                 self.tunnel_process.kill()
         if self.gateway_process:
             self.gateway_process.terminate()
+        if self.portal_process:
+            self.portal_process.terminate()
         print(f"[{time.strftime('%H:%M:%S')}] Tunnel manager terminated cleanly.")
 
 
 def main():
-    manager = TunnelManager()
+    import argparse
+    parser = argparse.ArgumentParser(description="CSII-Pay Cloudflare Tunnel Supervisor")
+    parser.add_argument("--domain", default=DEFAULT_CUSTOM_DOMAIN, help="Custom domain for tunnel (default: csiipay.app or api.csiipay.app)")
+    parser.add_argument("--token", default=os.getenv("CLOUDFLARE_TUNNEL_TOKEN", None), help="Cloudflare Tunnel Token")
+    parser.add_argument("--quick", action="store_true", help="Force Quick Tunnel mode (trycloudflare.com)")
+    args = parser.parse_args()
+
+    manager = TunnelManager(custom_domain=args.domain, token=args.token, force_quick=args.quick)
 
     def handle_sig(sig, frame):
         manager.shutdown()

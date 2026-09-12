@@ -1,0 +1,9 @@
+.git
+.github
+csii_pay_app/
+__pycache__/
+*.pyc
+.DS_Store
+.dart_tool/
+venv/
+.env

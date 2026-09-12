@@ -1440,20 +1440,33 @@ class _TokenSelector extends StatelessWidget {
             color: selected ? null : AppColors.bgDeep,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: selected ? Colors.transparent : AppColors.glassStroke,
-              width: 1,
+              color: selected
+                  ? (token == 'BDP'
+                      ? const Color(0xFFD4AF37).withValues(alpha: 0.7)
+                      : Colors.transparent)
+                  : AppColors.glassStroke,
+              width: (selected && token == 'BDP') ? 1.5 : 1.0,
             ),
             boxShadow: selected
-                ? [BoxShadow(color: gradient.colors.first.withValues(alpha: 0.3), blurRadius: 12)]
+                ? [
+                    BoxShadow(
+                      color: token == 'BDP'
+                          ? const Color(0xFFD4AF37).withValues(alpha: 0.25)
+                          : gradient.colors.first.withValues(alpha: 0.3),
+                      blurRadius: 12,
+                    ),
+                  ]
                 : null,
           ),
           child: Center(
             child: Text(
-              token,
+              token == 'BDP' ? 'BDP (Character)' : 'CSP (Service)',
               style: GoogleFonts.outfit(
-                fontSize: 16,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
-                color: selected ? Colors.white : AppColors.textSecondary,
+                color: selected
+                    ? (token == 'BDP' ? const Color(0xFFFFDF73) : Colors.white)
+                    : AppColors.textSecondary,
               ),
             ),
           ),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -11,13 +12,34 @@ import 'package:csii_pay_app/ui/features/auth/auth_gate.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase with platform-specific options
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // Initialize Firebase with platform-specific options (safe against web channel mismatch)
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint('Firebase initialization notice: $e');
+  }
 
-  // Load saved node URL if any, default to localhost:8000
-  final savedUrl = await WalletRepository.getSavedNodeUrl() ?? 'http://127.0.0.1:8000';
+  String? savedUrl;
+  try {
+    savedUrl = await WalletRepository.getSavedNodeUrl();
+  } catch (e) {
+    debugPrint('getSavedNodeUrl notice: $e');
+  }
+
+  if (savedUrl == null || savedUrl.isEmpty) {
+    if (kIsWeb) {
+      try {
+        final origin = Uri.base.origin;
+        if (origin.isNotEmpty && origin.startsWith('http')) {
+          savedUrl = origin;
+        }
+      } catch (_) {}
+    }
+  }
+  savedUrl ??= 'http://127.0.0.1:8080';
+
   final api = NodeApiService(savedUrl);
   final repo = WalletRepository(api);
 

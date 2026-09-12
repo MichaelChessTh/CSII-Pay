@@ -85,6 +85,42 @@ class BlockchainStorage:
                     );
                 """)
 
+                # Repair backfill for any existing transactions with 0.0 amount
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT tx_id, action, payload_json FROM transactions_index WHERE amount = 0.0;")
+                    rows = cur.fetchall()
+                    for r in rows:
+                        t_id = r["tx_id"]
+                        act = r["action"]
+                        try:
+                            p = json.loads(r["payload_json"])
+                            tok = p.get("token") or p.get("offer_token") or "CSP"
+                            amt = 0.0
+                            rec = p.get("recipient") or p.get("maker") or p.get("account_id")
+                            if act == "POA_REWARD":
+                                tok = "CSP"
+                                amt = float(p.get("total_csp") or p.get("base_reward_csp") or p.get("amount") or 10.0)
+                            elif act == "ACCOUNT_REGISTER":
+                                tok = "BDP"
+                                amt = float(p.get("initial_bdp") or 100.0)
+                            elif act == "ACCOUNT_VERIFY":
+                                tok = "BDP"
+                                amt = 100.0 if p.get("status") == "VERIFIED" else 0.0
+                            elif act == "ORDER_CANCEL":
+                                tok = p.get("offer_token") or tok
+                                amt = float(p.get("offer_amount") or 0.0)
+                            elif act == "ORDER_FULFILL":
+                                tok = p.get("offer_token") or p.get("request_token") or tok
+                                amt = float(p.get("take_offer") or p.get("fill_amount") or p.get("paid_request") or 0.0)
+                            if amt > 0 or rec:
+                                conn.execute("UPDATE transactions_index SET token = ?, amount = ?, recipient = COALESCE(?, recipient) WHERE tx_id = ?;", (tok, amt, rec, t_id))
+                        except Exception:
+                            pass
+                    conn.commit()
+                except Exception:
+                    pass
+
                 conn.commit()
             finally:
                 conn.close()
@@ -131,6 +167,28 @@ class BlockchainStorage:
                     creator = p.get("creator")
                     token = p.get("token") or p.get("offer_token") or p.get("wage_token") or p.get("attached_token") or "CSP"
                     amount = float(p.get("amount") or p.get("offer_amount") or p.get("wage") or p.get("attached_amount") or 0.0)
+
+                    # Action-specific intelligent token & amount extraction
+                    if action == "POA_REWARD":
+                        token = "CSP"
+                        amount = float(p.get("total_csp") or p.get("base_reward_csp") or p.get("amount") or amount or 10.0)
+                    elif action == "ACCOUNT_REGISTER":
+                        token = "BDP"
+                        amount = float(p.get("initial_bdp") or 100.0)
+                        recipient = p.get("account_id") or sender
+                    elif action == "ACCOUNT_VERIFY":
+                        token = "BDP"
+                        amount = 100.0 if p.get("status") == "VERIFIED" else 0.0
+                        recipient = p.get("account_id") or recipient
+                    elif action == "ORDER_CANCEL":
+                        token = p.get("offer_token") or token
+                        amount = float(p.get("offer_amount") or amount)
+                    elif action == "ORDER_FULFILL":
+                        token = p.get("offer_token") or p.get("request_token") or token
+                        amount = float(p.get("take_offer") or p.get("fill_amount") or p.get("paid_request") or amount)
+                        if not recipient:
+                            recipient = p.get("maker")
+
                     fee = float(tx.get("fee", 0.0))
                     fee_token = tx.get("fee_token", "CSP")
                     tx_time = float(tx.get("timestamp", b_time))

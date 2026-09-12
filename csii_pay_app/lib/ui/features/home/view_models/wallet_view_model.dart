@@ -14,6 +14,7 @@ class QuickSwapPreview {
   final double averageRate;
   final double bestRate;
   final double totalAvailableLiquidity;
+  final double maxPayableForLiquidity;
   final int ordersCount;
   final bool hasSufficientLiquidity;
 
@@ -23,6 +24,7 @@ class QuickSwapPreview {
     required this.averageRate,
     required this.bestRate,
     required this.totalAvailableLiquidity,
+    this.maxPayableForLiquidity = 0.0,
     required this.ordersCount,
     required this.hasSufficientLiquidity,
   });
@@ -62,6 +64,56 @@ class WalletViewModel extends ChangeNotifier {
   MarketplaceService get marketplaceService => _repo.marketplaceService;
   List<Map<String, dynamic>> _myGroups = [];
   List<Map<String, dynamic>> get myGroups => _myGroups;
+  List<Map<String, dynamic>> _mempoolTxs = [];
+  List<Map<String, dynamic>> get mempoolTxs => _mempoolTxs;
+
+  ActivityLeaderboardResponse? _activityData;
+  ActivityLeaderboardResponse? get activityData => _activityData;
+  bool _isLoadingActivity = false;
+  bool get isLoadingActivity => _isLoadingActivity;
+
+  double get userActivityScore {
+    final acc = currentAccountId;
+    if (acc != null && _activityData != null) {
+      for (final s in _activityData!.students) {
+        if (s.accountId == acc) return s.activityScore;
+      }
+    }
+    return _repo.cachedAccount?.activityScore ?? 0.0;
+  }
+
+  int get userActivityRank {
+    final acc = currentAccountId;
+    if (acc != null && _activityData != null) {
+      for (final s in _activityData!.students) {
+        if (s.accountId == acc) return s.rank;
+      }
+    }
+    return _repo.cachedAccount?.activityRank ?? 0;
+  }
+
+  StudentLeaderboardEntry? get userActivityEntry {
+    final acc = currentAccountId;
+    if (acc != null && _activityData != null) {
+      for (final s in _activityData!.students) {
+        if (s.accountId == acc) return s;
+      }
+    }
+    return null;
+  }
+
+  Future<void> fetchActivityData() async {
+    _isLoadingActivity = true;
+    notifyListeners();
+    try {
+      final res = await api.getActivityLeaderboard();
+      if (res.success && res.data != null) {
+        _activityData = res.data;
+      }
+    } catch (_) {}
+    _isLoadingActivity = false;
+    notifyListeners();
+  }
 
   // Convenience aliases
   String? get accountId => _repo.cachedAccount?.accountId;
@@ -263,9 +315,19 @@ class WalletViewModel extends ChangeNotifier {
       _refreshOrders(),
       _refreshNodeStatus(),
       _refreshBlocks(),
+      fetchMempool(),
+      fetchActivityData(),
     ]);
     // Dynamically load transactions in background so it doesn't block initial load
     unawaited(refreshTransactions(silent: true));
+  }
+
+  Future<void> fetchMempool() async {
+    final r = await api.getMempool();
+    if (r.success && r.data != null) {
+      _mempoolTxs = List<Map<String, dynamic>>.from(r.data!);
+      notifyListeners();
+    }
   }
 
   Future<void> _refreshAccount() async {
@@ -344,6 +406,7 @@ class WalletViewModel extends ChangeNotifier {
       _setLoading(false);
       if (r.success) {
         await _refreshAccount();
+        unawaited(refreshTransactions(silent: true));
         return null;
       }
       _error = r.error ?? 'Team transfer failed';
@@ -354,6 +417,7 @@ class WalletViewModel extends ChangeNotifier {
       _setLoading(false);
       if (r.success) {
         await _refreshAccount();
+        unawaited(refreshTransactions(silent: true));
         return null; // success
       }
       _error = r.error ?? 'Transfer failed';
@@ -380,6 +444,8 @@ class WalletViewModel extends ChangeNotifier {
     _setLoading(false);
     if (r.success) {
       await _refreshOrders();
+      await _refreshAccount();
+      unawaited(refreshTransactions(silent: true));
       return null;
     }
     return r.error ?? 'Order creation failed';
@@ -392,6 +458,7 @@ class WalletViewModel extends ChangeNotifier {
     if (r.success) {
       await _refreshOrders();
       await _refreshAccount();
+      unawaited(refreshTransactions(silent: true));
       return null;
     }
     return r.error ?? 'Failed to fulfill order';
@@ -404,6 +471,7 @@ class WalletViewModel extends ChangeNotifier {
     if (r.success) {
       await _refreshOrders();
       await _refreshAccount();
+      unawaited(refreshTransactions(silent: true));
       return null;
     }
     return r.error ?? 'Failed to cancel order';
@@ -423,8 +491,10 @@ class WalletViewModel extends ChangeNotifier {
         o.requestAmount > 0).toList();
 
     double totalLiquidity = 0.0;
+    double maxPayable = 0.0;
     for (final o in matching) {
       totalLiquidity += o.offerAmount;
+      maxPayable += o.requestAmount;
     }
 
     if (matching.isEmpty) {
@@ -434,6 +504,7 @@ class WalletViewModel extends ChangeNotifier {
         averageRate: 0.0,
         bestRate: 0.0,
         totalAvailableLiquidity: 0.0,
+        maxPayableForLiquidity: 0.0,
         ordersCount: 0,
         hasSufficientLiquidity: false,
       );
@@ -455,6 +526,7 @@ class WalletViewModel extends ChangeNotifier {
         averageRate: bestRate,
         bestRate: bestRate,
         totalAvailableLiquidity: totalLiquidity,
+        maxPayableForLiquidity: maxPayable,
         ordersCount: matching.length,
         hasSufficientLiquidity: true,
       );
@@ -493,6 +565,7 @@ class WalletViewModel extends ChangeNotifier {
       averageRate: avgRate,
       bestRate: bestRate,
       totalAvailableLiquidity: totalLiquidity,
+      maxPayableForLiquidity: maxPayable,
       ordersCount: ordersUsed,
       hasSufficientLiquidity: hasSufficient,
     );
@@ -572,11 +645,13 @@ class WalletViewModel extends ChangeNotifier {
       _setLoading(false);
       await _refreshOrders();
       await _refreshAccount();
+      unawaited(refreshTransactions(silent: true));
       return null;
     } catch (e) {
       _setLoading(false);
       await _refreshOrders();
       await _refreshAccount();
+      unawaited(refreshTransactions(silent: true));
       return e.toString();
     }
   }

@@ -30,19 +30,53 @@ class TransactionItem {
   });
 
   factory TransactionItem.fromJson(Map<String, dynamic> json) {
+    final payload = (json['payload'] as Map<String, dynamic>?) ?? {};
+    final action = json['action'] ?? 'TRANSFER';
+    String token = json['token'] ?? payload['token'] ?? payload['offer_token'] ?? payload['wage_token'] ?? 'CSP';
+    double amount = (json['amount'] as num?)?.toDouble() ?? 0.0;
+    String? recipient = json['recipient'] ?? payload['recipient'] ?? payload['maker'] ?? payload['worker'] ?? payload['account_id'];
+
+    if (amount <= 0) {
+      if (action == 'POA_REWARD') {
+        token = 'CSP';
+        amount = (payload['total_csp'] as num?)?.toDouble() ??
+            (payload['base_reward_csp'] as num?)?.toDouble() ??
+            (payload['amount'] as num?)?.toDouble() ??
+            10.0;
+      } else if (action == 'ACCOUNT_REGISTER') {
+        token = 'BDP';
+        amount = (payload['initial_bdp'] as num?)?.toDouble() ?? 100.0;
+      } else if (action == 'ACCOUNT_VERIFY') {
+        token = 'BDP';
+        amount = payload['status'] == 'VERIFIED' ? 100.0 : 0.0;
+      } else if (action == 'ORDER_CANCEL') {
+        token = payload['offer_token'] ?? token;
+        amount = (payload['offer_amount'] as num?)?.toDouble() ?? 0.0;
+      } else if (action == 'ORDER_CREATE') {
+        token = payload['offer_token'] ?? token;
+        amount = (payload['offer_amount'] as num?)?.toDouble() ?? 0.0;
+      } else if (action == 'ORDER_FULFILL') {
+        token = payload['offer_token'] ?? payload['request_token'] ?? token;
+        amount = (payload['take_offer'] as num?)?.toDouble() ??
+            (payload['fill_amount'] as num?)?.toDouble() ??
+            (payload['paid_request'] as num?)?.toDouble() ??
+            0.0;
+      }
+    }
+
     return TransactionItem(
       txId: json['tx_id'] ?? json['hash'] ?? '',
-      action: json['action'] ?? 'TRANSFER',
+      action: action,
       sender: json['sender'] ?? '',
-      recipient: json['recipient'],
-      token: json['token'] ?? 'CSP',
-      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      recipient: recipient,
+      token: token,
+      amount: amount,
       fee: (json['fee'] as num?)?.toDouble() ?? 0.0,
       feeToken: json['fee_token'] ?? 'CSP',
       timestamp: (json['timestamp'] as num?)?.toDouble() ?? 0.0,
       blockIndex: json['block_index'] as int?,
       status: json['status'] ?? 'CONFIRMED',
-      payload: (json['payload'] as Map<String, dynamic>?) ?? {},
+      payload: payload,
     );
   }
 
@@ -71,13 +105,20 @@ class TransactionItem {
 
   bool isIncoming(String myAccount) {
     if (action == 'MARKETPLACE_CLAIM' && sender == myAccount) return true;
-    if (action == 'POA_REWARD' && recipient == myAccount) return true;
+    if (action == 'POA_REWARD') return true;
+    if (action == 'ACCOUNT_REGISTER') return true;
+    if (action == 'ACCOUNT_VERIFY') return true;
+    if (action == 'ORDER_CANCEL' && sender == myAccount) return true;
     if (recipient == myAccount && sender != myAccount) return true;
     if (sender == myAccount) return false;
     return false;
   }
 
   bool isOutgoing(String myAccount) {
+    if (action == 'POA_REWARD') return false;
+    if (action == 'ACCOUNT_REGISTER') return false;
+    if (action == 'ACCOUNT_VERIFY') return false;
+    if (action == 'ORDER_CANCEL') return false;
     if (action == 'MARKETPLACE_CLAIM' && sender == myAccount) return false;
     return sender == myAccount;
   }

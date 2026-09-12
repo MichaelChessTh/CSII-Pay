@@ -15,11 +15,14 @@ Features:
 
 import argparse
 import copy
+import datetime
 import hashlib
 import hmac
 import http.server
 import json
+import math
 import os
+import random
 import secrets
 import socket
 import sys
@@ -345,9 +348,31 @@ class BlockchainState:
             }
             return True
 
-    def verify_account(self, account_id: str, password: str) -> bool:
+    def resolve_account_id(self, identifier: str) -> str | None:
+        if not identifier:
+            return None
+        clean = identifier.strip().lstrip("@")
         with self.lock:
-            acc = self.accounts.get(account_id)
+            if clean in self.accounts:
+                return clean
+            target = clean.lower()
+            for k, v in self.accounts.items():
+                if k.lower() == target or (v.get("student_id") and v.get("student_id") == clean):
+                    return k
+        return None
+
+    def verify_account(self, account_id: str, password: str) -> bool:
+        if not account_id or not password:
+            return False
+        clean = account_id.strip().lstrip("@")
+        with self.lock:
+            acc = self.accounts.get(clean)
+            if not acc:
+                target = clean.lower()
+                for k, v in self.accounts.items():
+                    if k.lower() == target or (v.get("student_id") and v.get("student_id") == clean):
+                        acc = v
+                        break
             if not acc or not acc.get("salt") or not acc.get("password_hash"):
                 return False
             return verify_password(password, acc["salt"], acc["password_hash"])
@@ -390,17 +415,19 @@ class BlockchainState:
                         return True, "Genesis transfer executed"
                     return False, "Invalid genesis transfer recipient"
 
-                elif action == "POA_REWARD":
+                elif action in ("POA_REWARD", "ACTIVITY_REWARD", "ACTIVITY_LOTTERY"):
                     recipient = payload.get("recipient")
-                    total_csp = float(payload.get("total_csp", payload.get("amount", 0.0)))
-                    total_bdp = float(payload.get("total_bdp", 0.0))
+                    token = payload.get("token", "CSP")
+                    amount = float(payload.get("amount", 0.0))
+                    total_csp = float(payload.get("total_csp", amount if token == "CSP" else 0.0))
+                    total_bdp = float(payload.get("total_bdp", amount if token == "BDP" else 0.0))
                     if not recipient or recipient not in self.accounts:
                         return False, f"Invalid reward recipient: {recipient}"
                     if total_csp > 0:
                         self.accounts[recipient]["balances"]["CSP"] = round(self.accounts[recipient]["balances"]["CSP"] + total_csp, 6)
                     if total_bdp > 0:
                         self.accounts[recipient]["balances"]["BDP"] = round(self.accounts[recipient]["balances"]["BDP"] + total_bdp, 6)
-                    return True, "PoA reward applied"
+                    return True, "Reward applied"
 
             # 2. Account Registration Action
             if action == "ACCOUNT_REGISTER":
@@ -428,6 +455,7 @@ class BlockchainState:
                     "password_hash": pwd_hash,
                     "salt": salt,
                     "public_key": pub_key,
+                    "student_id": payload.get("student_id", ""),
                     "balances": {"CSP": 0.0, "BDP": initial_bdp if is_council else 0.0},
                     "frozen_balances": {"CSP": 0.0, "BDP": 0.0 if is_council else initial_bdp},
                     "is_verified": is_council,
@@ -462,6 +490,7 @@ class BlockchainState:
                     return False, f"Cryptographic signature verification failed for sender '{sender}'"
 
             # Execute specific action
+            fee = float(tx.get("fee", 0.0))
             if action == "TRANSFER":
                 recipient = payload.get("recipient")
                 token = payload.get("token")
@@ -623,17 +652,34 @@ class BlockchainState:
                     take_offer = round(take_offer, 6)
                     is_partial = True
 
-                if sender_acc["balances"][req_token] < pay_request:
-                    return False, f"Taker has insufficient {req_token}. Has: {sender_acc['balances'][req_token]}, Needed: {pay_request}"
+                # Exchange trading commission (0.5% on paid request, min 0.001)
+                exchange_fee = round(pay_request * 0.005, 6)
+                if exchange_fee < 0.001:
+                    exchange_fee = 0.001
 
-                sender_acc["balances"][req_token] = round(sender_acc["balances"][req_token] - pay_request, 6)
+                if sender_acc["balances"][req_token] < pay_request + exchange_fee:
+                    return False, f"Taker has insufficient {req_token} for swap ({pay_request}) and exchange fee ({exchange_fee}). Has: {sender_acc['balances'][req_token]}"
+
+                sender_acc["balances"][req_token] = round(sender_acc["balances"][req_token] - pay_request - exchange_fee, 6)
                 self.accounts[maker]["balances"][req_token] = round(self.accounts[maker]["balances"][req_token] + pay_request, 6)
                 sender_acc["balances"][off_token] = round(sender_acc["balances"][off_token] + take_offer, 6)
+
+                tx["fee"] = exchange_fee
+                tx["fee_token"] = req_token
+                payload["take_offer"] = take_offer
+                payload["pay_request"] = pay_request
+                payload["offer_token"] = off_token
+                payload["request_token"] = req_token
+                payload["maker"] = maker
+                payload["amount"] = take_offer
+                payload["token"] = off_token
 
                 order.setdefault("fills", []).append({
                     "taker": sender,
                     "filled_offer": take_offer,
                     "paid_request": pay_request,
+                    "fee": exchange_fee,
+                    "fee_token": req_token,
                     "timestamp": time.time()
                 })
 
@@ -720,6 +766,7 @@ class BlockchainState:
                     "wage": wage,
                     "wage_token": wage_token,
                     "secret_hash": secret_hash,
+                    "secret_code": payload.get("secret_code"),
                     "status": "OPEN",
                     "created_at": float(tx.get("timestamp", time.time())),
                     "worker": None,
@@ -732,8 +779,39 @@ class BlockchainState:
                     "fees_paid_csp": 0.0, "fees_paid_bdp": 0.0, "score": 0.0
                 })
                 act["tx_count"] += 1
+                act["fees_paid_csp"] = round(act["fees_paid_csp"] + fee, 6)
                 act["score"] = round((act["tx_count"] * 10) + (act["volume_csp"] * 0.05) + (act["volume_bdp"] * 1.0), 2)
-                return True, f"Marketplace application {job_id} created with {wage} {wage_token} escrow locked"
+                return True, f"Marketplace job {job_id} created with {wage} {wage_token} escrow"
+
+            elif action == "MARKETPLACE_CANCEL":
+                job_id = payload.get("job_id")
+                job = self.marketplace_jobs.get(job_id)
+                if not job:
+                    return False, f"Application '{job_id}' not found"
+                if job["status"] != "OPEN":
+                    return False, f"Application '{job_id}' is not open (status: {job['status']})"
+
+                is_team_app = bool(job.get("team_name"))
+                group = self.groups.get(job.get("team_name")) if is_team_app else None
+                is_team_member = group and sender in (group.get("members") or [])
+                is_author = job.get("author") == sender or f"(by {sender})" in job.get("author", "")
+
+                if job["creator"] != sender and not (is_team_app and is_team_member) and not is_author:
+                    return False, "Only creator or team member can cancel application"
+
+                wage = job["wage"]
+                wage_token = job["wage_token"]
+                # Refund escrow back to creator (or team virtual account)
+                creator_acc = self.accounts.get(job["creator"])
+                if creator_acc:
+                    creator_acc["balances"][wage_token] = round(creator_acc["balances"].get(wage_token, 0.0) + wage, 6)
+                else:
+                    sender_acc["balances"][wage_token] = round(sender_acc["balances"].get(wage_token, 0.0) + wage, 6)
+
+                job["status"] = "CANCELLED"
+                sender_acc["nonce"] += 1
+                sender_acc["last_active"] = time.time()
+                return True, f"Application {job_id} cancelled, escrowed {wage} {wage_token} refunded"
 
             elif action == "MARKETPLACE_CLAIM":
                 job_id = payload.get("job_id")
@@ -775,24 +853,6 @@ class BlockchainState:
                 act["tx_count"] += 1
                 act["score"] = round((act["tx_count"] * 10) + (act["volume_csp"] * 0.05) + (act["volume_bdp"] * 1.0), 2)
                 return True, f"Application {job_id} claimed successfully! Transferred {wage} {wage_token} to {sender}"
-
-            elif action == "MARKETPLACE_CANCEL":
-                job_id = payload.get("job_id")
-                job = self.marketplace_jobs.get(job_id)
-                if not job:
-                    return False, f"Application '{job_id}' not found"
-                if job["status"] != "OPEN":
-                    return False, f"Application '{job_id}' is not open (status: {job['status']})"
-                if job["creator"] != sender:
-                    return False, "Only creator can cancel application"
-
-                wage = job["wage"]
-                wage_token = job["wage_token"]
-                sender_acc["balances"][wage_token] = round(sender_acc["balances"][wage_token] + wage, 6)
-                job["status"] = "CANCELLED"
-                sender_acc["nonce"] += 1
-                sender_acc["last_active"] = time.time()
-                return True, f"Application {job_id} cancelled, escrowed {wage} {wage_token} refunded"
 
             elif action == "CONTRACT_DEPLOY":
                 code = str(payload.get("code", "")).strip()
@@ -1257,10 +1317,10 @@ class NodeServer:
         self.state = BlockchainState()
         self.chain = []
         self.mempool = []
-        self.mempool_lock = threading.Lock()
+        self.mempool_lock = threading.RLock()
         self.peers = set()
-        self.peer_lock = threading.Lock()
-        self.sync_lock = threading.Lock()
+        self.peer_lock = threading.RLock()
+        self.sync_lock = threading.RLock()
         self.quarantined_peers = {}  # {peer_url: unban_timestamp}
 
         if initial_peers:
@@ -1270,11 +1330,13 @@ class NodeServer:
                     self.add_peer(p_clean)
 
         self.active_accounts = {}
-        self.activity_lock = threading.Lock()
+        self.activity_lock = threading.RLock()
         self.session_tokens = {}
+        self.recent_lottery_winners = []
         self.running = True
 
         self.init_chain()
+        self.refresh_lottery_winners_from_chain()
 
         if not self.authenticate_operator():
             raise ValueError(f"CRITICAL: Failed to authenticate node operator account '{self.account_id}'. Server cannot operate.")
@@ -1323,29 +1385,86 @@ class NodeServer:
             except Exception as e:
                 print(f"[!] Warning: Failed loading from SQLite storage: {e}")
 
-        # 3. Check legacy JSON chain file and migrate to SQLite
-        if os.path.exists(self.chain_file):
-            try:
-                with open(self.chain_file, "r") as f:
-                    data = json.load(f)
-                    candidate = data.get("chain", [])
-                    if candidate and self.validate_chain(candidate):
-                        self.chain = candidate
-                        print(f"[*] Loaded {len(self.chain)} verified blocks from {self.chain_file}. Migrating to SQLite WAL...")
-                        for blk in self.chain:
-                            self.storage.append_block(blk)
-                        self.rebuild_state_from_chain()
-                        self.storage.save_checkpoint(self.chain[-1]["index"], self.state.get_state_hash(), self.state.export_dict())
-                        return
-                    else:
-                        print(f"[!] Warning: Existing chain in {self.chain_file} failed validation or is corrupt. Backing up...")
-                        bak_file = f"{self.chain_file}.corrupt_{int(time.time())}.bak"
-                        os.rename(self.chain_file, bak_file)
-            except Exception as e:
-                print(f"[!] Warning: Failed to load existing chain file: {e}")
+        # 3. Check JSON chain files (current port or port 8000 fallback) and migrate to SQLite
+        candidate_files = [self.chain_file]
+        fallback_8000 = os.path.join(self.data_dir, "node_8000_chain.json")
+        if fallback_8000 not in candidate_files:
+            candidate_files.append(fallback_8000)
 
-        # 4. Create canonical Genesis block
+        for c_file in candidate_files:
+            if os.path.exists(c_file):
+                try:
+                    with open(c_file, "r") as f:
+                        data = json.load(f)
+                        candidate = data.get("chain", [])
+                        if candidate and self.validate_chain(candidate):
+                            self.chain = candidate
+                            print(f"[*] Loaded {len(self.chain)} verified blocks from {c_file}. Migrating to SQLite WAL...")
+                            for blk in self.chain:
+                                self.storage.append_block(blk)
+                            self.rebuild_state_from_chain()
+                            self.storage.save_checkpoint(self.chain[-1]["index"], self.state.get_state_hash(), self.state.export_dict())
+                            return
+                        else:
+                            print(f"[!] Warning: Existing chain in {c_file} failed validation or is corrupt. Backing up...")
+                            bak_file = f"{c_file}.corrupt_{int(time.time())}.bak"
+                            os.rename(c_file, bak_file)
+                except Exception as e:
+                    print(f"[!] Warning: Failed to load chain file {c_file}: {e}")
+
+        # 4. Check Cloud Firestore for latest chain backup (for ephemeral cloud containers)
+        cloud_chain = self.load_chain_from_cloud()
+        if cloud_chain and self.validate_chain(cloud_chain):
+            self.chain = cloud_chain
+            print(f"[★] Restored {len(self.chain)} verified blocks from Cloud Firestore backup!")
+            for blk in self.chain:
+                self.storage.append_block(blk)
+            self.rebuild_state_from_chain()
+            self.save_chain()
+            return
+
+        # 5. Create canonical Genesis block
         self.create_genesis_block()
+
+    def load_chain_from_cloud(self) -> list | None:
+        """Fetches blockchain ledger backup from Cloud Firestore if available."""
+        try:
+            url = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/blockchain"
+            req = urllib.request.Request(url, headers={"User-Agent": "CSII-Pay-Cloud-Sync"})
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    fields = data.get("fields", {})
+                    chain_str = fields.get("chain_data", {}).get("stringValue")
+                    if chain_str:
+                        parsed = json.loads(chain_str).get("chain", [])
+                        if parsed:
+                            return parsed
+        except Exception:
+            pass
+        return None
+
+    def sync_chain_to_cloud(self):
+        """Asynchronously backs up current blockchain ledger to Cloud Firestore."""
+        def _sync():
+            try:
+                if not self.chain:
+                    return
+                url = "https://firestore.googleapis.com/v1/projects/csii-pay/databases/(default)/documents/network_config/blockchain"
+                body = json.dumps({
+                    "fields": {
+                        "block_height": {"integerValue": str(len(self.chain) - 1)},
+                        "latest_block_hash": {"stringValue": self.chain[-1]["hash"]},
+                        "chain_data": {"stringValue": json.dumps({"chain": self.chain})},
+                        "updated_at": {"timestampValue": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                    }
+                }).encode("utf-8")
+                req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="PATCH")
+                with urllib.request.urlopen(req, timeout=5.0):
+                    pass
+            except Exception:
+                pass
+        threading.Thread(target=_sync, daemon=True).start()
 
     def create_genesis_block(self):
         """Construct canonical Genesis block."""
@@ -1362,50 +1481,53 @@ class NodeServer:
             initial_bdp=0.0
         )
 
-        genesis_tx = {
-            "tx_id": hash_data("GENESIS_MINT_CSP"),
-            "sender": "SYSTEM",
-            "action": "TRANSFER",
-            "payload": {
-                "recipient": GENESIS_ACCOUNT,
-                "token": "CSP",
-                "amount": GENESIS_CSP
+        genesis_txs = [
+            {
+                "tx_id": hash_data(f"GENESIS_CSP_{GENESIS_ACCOUNT}"),
+                "sender": "SYSTEM",
+                "action": "TRANSFER",
+                "payload": {
+                    "recipient": GENESIS_ACCOUNT,
+                    "token": "CSP",
+                    "amount": GENESIS_CSP
+                },
+                "nonce": 0,
+                "timestamp": 1700000000.0,
+                "signature": "GENESIS_SIGNATURE"
             },
-            "nonce": 0,
-            "timestamp": 1700000000.0,
-            "signature": "GENESIS_SIGNATURE"
-        }
-        genesis_tx_bdp = {
-            "tx_id": hash_data("GENESIS_MINT_BDP"),
-            "sender": "SYSTEM",
-            "action": "TRANSFER",
-            "payload": {
-                "recipient": GENESIS_ACCOUNT,
-                "token": "BDP",
-                "amount": GENESIS_BDP
-            },
-            "nonce": 1,
-            "timestamp": 1700000000.0,
-            "signature": "GENESIS_SIGNATURE"
-        }
+            {
+                "tx_id": hash_data(f"GENESIS_BDP_{GENESIS_ACCOUNT}"),
+                "sender": "SYSTEM",
+                "action": "TRANSFER",
+                "payload": {
+                    "recipient": GENESIS_ACCOUNT,
+                    "token": "BDP",
+                    "amount": 100.0
+                },
+                "nonce": 1,
+                "timestamp": 1700000000.0,
+                "signature": "GENESIS_SIGNATURE"
+            }
+        ]
 
-        self.state.apply_transaction(genesis_tx)
-        self.state.apply_transaction(genesis_tx_bdp)
+        for tx in genesis_txs:
+            self.state.apply_transaction(tx)
 
         genesis_block = {
             "index": 0,
             "prev_hash": "0" * 64,
             "timestamp": 1700000000.0,
             "validator": GENESIS_ACCOUNT,
-            "transactions": [genesis_tx, genesis_tx_bdp],
+            "transactions": genesis_txs,
             "activity_proofs": [],
-            "state_hash": self.state.get_state_hash(),
+            "state_hash": self.state.get_state_hash()
         }
         genesis_block["hash"] = self.compute_block_hash(genesis_block)
+
         self.chain = [genesis_block]
         self.storage.append_block(genesis_block)
-        self.storage.save_checkpoint(0, self.state.get_state_hash(), self.state.export_dict())
         self.save_chain()
+        print(f"[*] Genesis block created. Hash: {genesis_block['hash'][:12]} | State: {genesis_block['state_hash'][:12]}")
 
     def compute_block_hash(self, block: dict) -> str:
         header = {
@@ -1429,6 +1551,9 @@ class NodeServer:
 
             with open(self.chain_file, "w") as f:
                 json.dump({"chain": self.chain}, f, indent=2)
+
+            # Asynchronously sync to Cloud Firestore
+            self.sync_chain_to_cloud()
         except Exception as e:
             print(f"[!] Error saving chain to disk: {e}")
 
@@ -1492,6 +1617,275 @@ class NodeServer:
                 "score": self.active_accounts[account_id]["heartbeat_count"]
             }
 
+    def refresh_lottery_winners_from_chain(self):
+        winners = []
+        for blk in self.chain:
+            for tx in blk.get("transactions", []):
+                if tx.get("action") in ("ACTIVITY_REWARD", "ACTIVITY_LOTTERY"):
+                    p = tx.get("payload", {})
+                    winners.append({
+                        "block_height": blk.get("index"),
+                        "recipient": p.get("recipient"),
+                        "amount": float(p.get("amount", p.get("total_bdp", 0.1))),
+                        "token": p.get("token", "BDP"),
+                        "timestamp": tx.get("timestamp", blk.get("timestamp")),
+                        "score": float(p.get("winner_score", 0.0))
+                    })
+        self.recent_lottery_winners = winners[-50:]
+
+    def get_student_activity_data(self, state=None):
+        """
+        Aggregates activity metrics and calculates uncapped, continuous scores for all individual student accounts.
+        Excludes group accounts, system accounts, and genesis council.
+        Features:
+        - Uncapped continuous logarithmic scoring for transactions and commissions (no hard caps)
+        - Exponential marketplace job complexity (1★: 10pts, 2★: 25pts, 3★: 50pts, 4★: 100pts, 5★: 200pts)
+        - BAScii Interdisciplinary Ecosystem Diversity Multiplier (up to +25% bonus)
+        - 5 BAScii Prestige Tiers (Bronze Scholar -> Silver Innovator -> Gold Trailblazer -> Platinum Architect -> BAScii Fellow)
+        - Stochastic sqrt-weighted lottery tickets for 10th-block 0.1 BDP awards
+        """
+        if state is None:
+            state = self.get_effective_state()
+
+        now_dt = datetime.datetime.now()
+        cur_year = now_dt.year
+        cur_month = now_dt.month
+        month_start_ts = datetime.datetime(cur_year, cur_month, 1).timestamp()
+
+        # Identify student accounts
+        group_names = set(state.groups.keys()) if hasattr(state, "groups") else set()
+        student_accounts = {}
+        for acc_id, acc in state.accounts.items():
+            if acc_id == "SYSTEM" or acc_id.startswith("NODE_") or acc_id == GENESIS_ACCOUNT:
+                continue
+            if acc_id in group_names or acc.get("is_group_account"):
+                continue
+            student_accounts[acc_id] = {
+                "account_id": acc_id,
+                "monthly_tx_count": 0,
+                "monthly_fees": 0.0,
+                "all_time_tx_count": 0,
+                "all_time_fees": 0.0,
+                "completed_jobs_count": 0,
+                "jobs_score": 0,
+            }
+
+        # Track diversity activities
+        student_used_dex = set()
+        if hasattr(state, "orders") and isinstance(state.orders, dict):
+            for oid, od in state.orders.items():
+                if isinstance(od, dict):
+                    creator = od.get("creator")
+                    if creator in student_accounts:
+                        student_used_dex.add(creator)
+
+        student_in_groups = set()
+        if hasattr(state, "groups") and isinstance(state.groups, dict):
+            for gname, gdata in state.groups.items():
+                if isinstance(gdata, dict):
+                    for m in gdata.get("members", []):
+                        if isinstance(m, str):
+                            student_in_groups.add(m)
+                    for o in gdata.get("owners", []):
+                        if isinstance(o, str):
+                            student_in_groups.add(o)
+
+        # Aggregate transactions from chain
+        for blk in self.chain:
+            for tx in blk.get("transactions", []):
+                sender = tx.get("sender")
+                action = tx.get("action", "")
+                if sender in student_accounts:
+                    ts = float(tx.get("timestamp") or 0.0)
+                    fee = float(tx.get("fee") or 0.0)
+                    student_accounts[sender]["all_time_tx_count"] += 1
+                    student_accounts[sender]["all_time_fees"] = round(student_accounts[sender]["all_time_fees"] + fee, 6)
+                    if ts >= month_start_ts:
+                        student_accounts[sender]["monthly_tx_count"] += 1
+                        student_accounts[sender]["monthly_fees"] = round(student_accounts[sender]["monthly_fees"] + fee, 6)
+                    if "ORDER" in action or "SWAP" in action or action in ("BUY_ORDER", "CANCEL_ORDER", "FILL_ORDER"):
+                        student_used_dex.add(sender)
+
+        # Also count pending mempool transactions
+        with self.mempool_lock:
+            for tx in self.mempool:
+                sender = tx.get("sender")
+                action = tx.get("action", "")
+                if sender in student_accounts:
+                    fee = float(tx.get("fee") or 0.0)
+                    student_accounts[sender]["all_time_tx_count"] += 1
+                    student_accounts[sender]["all_time_fees"] = round(student_accounts[sender]["all_time_fees"] + fee, 6)
+                    student_accounts[sender]["monthly_tx_count"] += 1
+                    student_accounts[sender]["monthly_fees"] = round(student_accounts[sender]["monthly_fees"] + fee, 6)
+                    if "ORDER" in action or "SWAP" in action:
+                        student_used_dex.add(sender)
+
+        # Exponential difficulty mapping for marketplace jobs:
+        # 1★ = 10 pts, 2★ = 25 pts, 3★ = 50 pts, 4★ = 100 pts, 5★ = 200 pts
+        DIFFICULTY_POINTS = {1: 10, 2: 25, 3: 50, 4: 100, 5: 200}
+        jobs = state.marketplace_jobs if hasattr(state, "marketplace_jobs") else {}
+        for jid, job in jobs.items():
+            if job.get("status") == "COMPLETED":
+                worker = job.get("worker")
+                if worker in student_accounts:
+                    diff = int(job.get("difficulty", 1))
+                    diff = max(1, min(5, diff))
+                    pts = DIFFICULTY_POINTS.get(diff, 10)
+                    student_accounts[worker]["completed_jobs_count"] += 1
+                    student_accounts[worker]["jobs_score"] += pts
+
+        # Compute individual continuous scores
+        total_tickets_all = 0.0
+        students_list = []
+
+        for acc_id, d in student_accounts.items():
+            # Continuous logarithmic growth without hard ceiling
+            pts_m_tx = round(15.0 * math.log(1.0 + d["monthly_tx_count"]), 2)
+            pts_m_fees = round(50.0 * math.log(1.0 + max(0.0, d["monthly_fees"]) * 2.0), 2)
+            pts_a_tx = round(15.0 * math.log(1.0 + d["all_time_tx_count"] * 0.5), 2)
+            pts_a_fees = round(25.0 * math.log(1.0 + max(0.0, d["all_time_fees"])), 2)
+            pts_jobs = float(d["jobs_score"])
+
+            base_score = pts_m_tx + pts_m_fees + pts_a_tx + pts_a_fees + pts_jobs
+
+            # BAScii Interdisciplinary Ecosystem Diversity Multiplier (+5% to +25%)
+            has_transfers = d["all_time_tx_count"] > 0
+            has_jobs = d["completed_jobs_count"] > 0
+            has_exchange = acc_id in student_used_dex
+            has_group = acc_id in student_in_groups
+
+            div_bonus = 0.0
+            if has_transfers:
+                div_bonus += 0.05
+            if has_jobs:
+                div_bonus += 0.10
+            if has_exchange:
+                div_bonus += 0.05
+            if has_group:
+                div_bonus += 0.05
+            div_mult = round(1.0 + div_bonus, 2)
+
+            total_score = round(base_score * div_mult, 1)
+
+            # 5 BAScii Prestige Tiers
+            if total_score >= 1500.0:
+                tier_name = "BAScii Fellow"
+                tier_badge = "👑 BAScii Fellow"
+                tier_color = "#C89B27"
+                rank_level = 5
+                next_tier = None
+                next_threshold = 1500.0
+                points_to_next = 0.0
+                progress_pct = 100.0
+            elif total_score >= 700.0:
+                tier_name = "Platinum Architect"
+                tier_badge = "💎 Platinum Architect"
+                tier_color = "#E5B838"
+                rank_level = 4
+                next_tier = "BAScii Fellow"
+                next_threshold = 1500.0
+                points_to_next = round(1500.0 - total_score, 1)
+                progress_pct = round(min(100.0, ((total_score - 700.0) / 800.0) * 100.0), 1)
+            elif total_score >= 300.0:
+                tier_name = "Gold Trailblazer"
+                tier_badge = "🥇 Gold Trailblazer"
+                tier_color = "#D4A325"
+                rank_level = 3
+                next_tier = "Platinum Architect"
+                next_threshold = 700.0
+                points_to_next = round(700.0 - total_score, 1)
+                progress_pct = round(min(100.0, ((total_score - 300.0) / 400.0) * 100.0), 1)
+            elif total_score >= 100.0:
+                tier_name = "Silver Innovator"
+                tier_badge = "🥈 Silver Innovator"
+                tier_color = "#A8B2C1"
+                rank_level = 2
+                next_tier = "Gold Trailblazer"
+                next_threshold = 300.0
+                points_to_next = round(300.0 - total_score, 1)
+                progress_pct = round(min(100.0, ((total_score - 100.0) / 200.0) * 100.0), 1)
+            else:
+                tier_name = "Bronze Scholar"
+                tier_badge = "🥉 Bronze Scholar"
+                tier_color = "#CD7F32"
+                rank_level = 1
+                next_tier = "Silver Innovator"
+                next_threshold = 100.0
+                points_to_next = round(100.0 - total_score, 1)
+                progress_pct = round(min(100.0, (total_score / 100.0) * 100.0), 1)
+
+            # Dampened lottery tickets via sqrt to reward leaders while maintaining healthy lottery competition
+            tickets = round(max(1.0, 1.0 + math.sqrt(max(0.0, total_score))), 2)
+            total_tickets_all += tickets
+
+            d["activity_score"] = total_score
+            d["tickets"] = tickets
+            d["tier"] = {
+                "name": tier_name,
+                "badge": tier_badge,
+                "color": tier_color,
+                "rank_level": rank_level,
+                "next_tier": next_tier,
+                "next_threshold": next_threshold,
+                "points_to_next": points_to_next,
+                "progress_pct": progress_pct
+            }
+            d["diversity"] = {
+                "multiplier": div_mult,
+                "has_transfers": has_transfers,
+                "has_jobs": has_jobs,
+                "has_exchange": has_exchange,
+                "has_group": has_group,
+            }
+            d["breakdown"] = {
+                "monthly_activity": {"val": d["monthly_tx_count"], "pts": pts_m_tx, "label": "Monthly Activity"},
+                "monthly_commissions": {"val": round(d["monthly_fees"], 4), "pts": pts_m_fees, "label": "Monthly Commissions"},
+                "all_time_activity": {"val": d["all_time_tx_count"], "pts": pts_a_tx, "label": "All-Time Activity"},
+                "all_time_commissions": {"val": round(d["all_time_fees"], 4), "pts": pts_a_fees, "label": "All-Time Commissions"},
+                "jobs_complexity": {"val": d["jobs_score"], "jobs_count": d["completed_jobs_count"], "pts": pts_jobs, "label": "Jobs & Tasks Complexity"},
+                "diversity_bonus": {"multiplier": div_mult, "label": "BAScii Ecosystem Multiplier"}
+            }
+            students_list.append(d)
+
+        # Sort by activity score descending
+        students_list.sort(key=lambda x: (x["activity_score"], x["all_time_tx_count"], x["all_time_fees"]), reverse=True)
+
+        # Assign ranks and calculate win probabilities
+        for idx, d in enumerate(students_list):
+            d["rank"] = idx + 1
+            prob = (d["tickets"] / total_tickets_all * 100.0) if total_tickets_all > 0 else 0.0
+            d["win_probability_pct"] = round(prob, 2)
+
+        cur_height = len(self.chain) - 1 if self.chain else 0
+        next_lottery = ((cur_height // 10) + 1) * 10
+        blocks_left = max(0, next_lottery - cur_height)
+
+        return {
+            "students": students_list,
+            "student_map": {d["account_id"]: d for d in students_list},
+            "total_tickets": round(total_tickets_all, 2),
+            "recent_lottery_winners": list(self.recent_lottery_winners),
+            "next_lottery_block": next_lottery,
+            "blocks_until_lottery": blocks_left,
+            "tiers_info": [
+                {"name": "Bronze Scholar", "threshold": 0, "color": "#CD7F32", "badge": "🥉 Bronze Scholar"},
+                {"name": "Silver Innovator", "threshold": 100, "color": "#A8B2C1", "badge": "🥈 Silver Innovator"},
+                {"name": "Gold Trailblazer", "threshold": 300, "color": "#D4A325", "badge": "🥇 Gold Trailblazer"},
+                {"name": "Platinum Architect", "threshold": 700, "color": "#E5B838", "badge": "💎 Platinum Architect"},
+                {"name": "BAScii Fellow", "threshold": 1500, "color": "#C89B27", "badge": "👑 BAScii Fellow"}
+            ]
+        }
+
+    def pick_activity_lottery_winner(self, state, block_index, prev_hash):
+        data = self.get_student_activity_data(state)
+        students = data.get("students", [])
+        if not students:
+            return None, 0.0
+
+        weights = [s["tickets"] for s in students]
+        winner = random.choices(students, weights=weights, k=1)[0]
+        return winner["account_id"], winner["activity_score"]
+
     # -------------------------------------------------------------
     # Proof of Activity (PoA) Mining Engine
     # -------------------------------------------------------------
@@ -1545,25 +1939,44 @@ class NodeServer:
                 else:
                     print(f"[!] Dropped invalid mempool tx {tx.get('tx_id')}: {msg}")
 
+            # Always clean invalid transactions from mempool
+            with self.mempool_lock:
+                self.mempool = [t for t in self.mempool if t in valid_txs]
+
             if not valid_txs:
-                with self.mempool_lock:
-                    self.mempool = [t for t in self.mempool if t not in txs_to_mine]
+                return
+
+            # Consensus Rule: Blocks are forged when there are commissions OR state transitions
+            # (such as registrations, verifications, orders, contracts, groups, transfers).
+            has_trigger = (
+                total_fee_csp > 0 or total_fee_bdp > 0 or 
+                any(float(tx.get("fee", 0.0)) > 0 for tx in valid_txs) or
+                any(tx.get("action") in (
+                    "ACCOUNT_REGISTER", "ACCOUNT_VERIFY", "ORDER_CREATE", 
+                    "ORDER_FULFILL", "ORDER_CANCEL", "GROUP_CREATE", 
+                    "GROUP_JOIN", "GROUP_PAYOUT", "LOTTERY_DISTRIBUTE", "TRANSFER"
+                ) for tx in valid_txs)
+            )
+            if not has_trigger:
                 return
 
             block_txs = list(valid_txs)
             validator_id = self.account_id if self.account_id else f"NODE_{self.node_id}"
 
             if self.account_id:
+                reward_amount = round(base_reward_csp + total_fee_csp, 6)
                 reward_tx = {
                     "tx_id": hash_data(f"BLOCK_REWARD_{new_index}_{self.account_id}_{now}"),
                     "sender": "SYSTEM",
                     "action": "POA_REWARD",
                     "payload": {
                         "recipient": self.account_id,
+                        "token": "CSP",
+                        "amount": reward_amount,
                         "base_reward_csp": base_reward_csp,
                         "fee_reward_csp": round(total_fee_csp, 6),
                         "fee_reward_bdp": round(total_fee_bdp, 6),
-                        "total_csp": round(base_reward_csp + total_fee_csp, 6),
+                        "total_csp": reward_amount,
                         "total_bdp": round(total_fee_bdp, 6)
                     },
                     "timestamp": now,
@@ -1574,6 +1987,40 @@ class NodeServer:
                 print(f"[+] PoA Block #{new_index} added by node ({self.account_id}) | Operator Reward: {base_reward_csp} CSP + fees: {total_fee_csp:.4f} CSP, {total_fee_bdp:.4f} BDP | Txs: {len(valid_txs)}")
             else:
                 print(f"[+] PoA Block #{new_index} added by guest node ({validator_id}) | No reward minted | Txs: {len(valid_txs)}")
+
+            # 10th Block Student Activity Lottery (awards 0.1 BDP to an active student, zero impact on operator CSP reward)
+            if new_index % 10 == 0:
+                lottery_winner, winner_score = self.pick_activity_lottery_winner(temp_state, new_index, prev_hash)
+                if lottery_winner:
+                    activity_reward_tx = {
+                        "tx_id": hash_data(f"ACTIVITY_LOTTERY_{new_index}_{lottery_winner}_{now}"),
+                        "sender": "SYSTEM",
+                        "action": "ACTIVITY_REWARD",
+                        "payload": {
+                            "recipient": lottery_winner,
+                            "token": "BDP",
+                            "amount": 0.1,
+                            "total_bdp": 0.1,
+                            "block_height": new_index,
+                            "winner_score": winner_score,
+                            "reason": "10th Block Student Activity Lottery Reward"
+                        },
+                        "timestamp": now,
+                        "signature": "SYSTEM_LOTTERY_REWARD"
+                    }
+                    temp_state.apply_transaction(activity_reward_tx)
+                    block_txs.append(activity_reward_tx)
+                    self.recent_lottery_winners.append({
+                        "block_height": new_index,
+                        "recipient": lottery_winner,
+                        "amount": 0.1,
+                        "token": "BDP",
+                        "timestamp": now,
+                        "score": winner_score
+                    })
+                    if len(self.recent_lottery_winners) > 50:
+                        self.recent_lottery_winners = self.recent_lottery_winners[-50:]
+                    print(f"[★] 10th Block Student Activity Lottery (Block #{new_index}): Winner @{lottery_winner} rewarded 0.1 BDP! (Activity Score: {winner_score})")
 
             new_block = {
                 "index": new_index,
@@ -1861,6 +2308,19 @@ class NodeServer:
                     pass
             threading.Thread(target=send, args=(peer,), daemon=True).start()
 
+    def get_effective_state(self) -> BlockchainState:
+        """Returns a cloned state with all valid pending mempool transactions applied."""
+        with self.state.lock:
+            with self.mempool_lock:
+                temp_state = self.state.clone()
+                valid_mempool = []
+                for mtx in self.mempool:
+                    ok_m, _ = temp_state.apply_transaction(mtx)
+                    if ok_m:
+                        valid_mempool.append(mtx)
+                self.mempool = valid_mempool
+                return temp_state
+
     def submit_tx(self, tx: dict) -> tuple[bool, str]:
         """Validates and adds transaction to local mempool."""
         with self.mempool_lock:
@@ -1873,11 +2333,8 @@ class NodeServer:
                 if any(t.get("tx_id") == tx_id for t in b.get("transactions", [])):
                     return False, "Transaction has already been confirmed in chain"
 
-            # Pre-validate against clone of current state plus pending mempool transactions
-            temp_state = self.state.clone()
-            for mtx in self.mempool:
-                temp_state.apply_transaction(mtx)
-
+            # Pre-validate against current effective state (including valid mempool txs)
+            temp_state = self.get_effective_state()
             ok, msg = temp_state.apply_transaction(tx)
             if not ok:
                 return False, msg
@@ -1886,6 +2343,13 @@ class NodeServer:
             print(f"[Mempool] Accepted tx {tx_id[:10]}... ({tx.get('action')} from {tx.get('sender')})")
 
         self.broadcast_tx(tx)
+        # Immediately trigger block forging if tx carries a commission or is a state-changing action
+        if float(tx.get("fee", 0.0)) > 0 or tx.get("action") in (
+            "ACCOUNT_REGISTER", "ACCOUNT_VERIFY", "ORDER_CREATE", 
+            "ORDER_FULFILL", "ORDER_CANCEL", "GROUP_CREATE", 
+            "GROUP_JOIN", "GROUP_PAYOUT", "TRANSFER"
+        ):
+            threading.Thread(target=self.forge_block, daemon=True).start()
         return True, "Transaction accepted into mempool"
 
     # -------------------------------------------------------------
@@ -1927,19 +2391,71 @@ class NodeServer:
                     with node.activity_lock:
                         active_users = len(node.active_accounts)
 
+                    cur_h = len(node.chain) - 1 if node.chain else 0
+                    next_lottery = ((cur_h // 10) + 1) * 10
+
                     self.send_json(200, {
                         "status": "online",
                         "node_id": node.node_id,
                         "operator_account": node.account_id or "GUEST_UNASSIGNED",
                         "host": node.host,
                         "port": node.port,
-                        "block_height": len(node.chain) - 1,
+                        "block_height": cur_h,
                         "latest_block_hash": node.chain[-1]["hash"] if node.chain else "",
                         "peers_count": peers_count,
                         "mempool_size": mempool_count,
                         "active_users_count": active_users,
+                        "next_lottery_block": next_lottery,
+                        "blocks_until_lottery": max(0, next_lottery - cur_h),
                         "consensus": "Proof of Activity (PoA)",
                         "tokens": ["CSP (Layer 1 Base)", "BDP (Layer 2)"]
+                    })
+
+                elif url == "/activity/leaderboard":
+                    eff_state = node.get_effective_state()
+                    act_data = node.get_student_activity_data(eff_state)
+                    resp = {
+                        "students": act_data["students"],
+                        "total_tickets": act_data["total_tickets"],
+                        "recent_lottery_winners": act_data["recent_lottery_winners"],
+                        "next_lottery_block": act_data["next_lottery_block"],
+                        "blocks_until_lottery": act_data["blocks_until_lottery"],
+                        "formula_weights": act_data["formula_weights"]
+                    }
+                    self.send_json(200, resp)
+
+                elif url.startswith("/activity/account/"):
+                    target_acc = url.split("/activity/account/")[1]
+                    eff_state = node.get_effective_state()
+                    act_data = node.get_student_activity_data(eff_state)
+                    student_info = act_data["student_map"].get(target_acc)
+                    if not student_info:
+                        student_info = {
+                            "account_id": target_acc,
+                            "rank": len(act_data["students"]) + 1,
+                            "activity_score": 0.0,
+                            "tickets": 1.0,
+                            "win_probability_pct": 0.0,
+                            "monthly_tx_count": 0,
+                            "monthly_fees": 0.0,
+                            "all_time_tx_count": 0,
+                            "all_time_fees": 0.0,
+                            "completed_jobs_count": 0,
+                            "jobs_score": 0,
+                            "breakdown": {
+                                "monthly_activity": {"val": 0, "pts": 0.0, "weight_pct": 10},
+                                "monthly_commissions": {"val": 0.0, "pts": 0.0, "weight_pct": 40},
+                                "all_time_activity": {"val": 0, "pts": 0.0, "weight_pct": 10},
+                                "all_time_commissions": {"val": 0.0, "pts": 0.0, "weight_pct": 10},
+                                "jobs_complexity": {"val": 0, "jobs_count": 0, "pts": 0.0, "weight_pct": 30}
+                            }
+                        }
+                    self.send_json(200, {
+                        "student": student_info,
+                        "recent_lottery_winners": act_data["recent_lottery_winners"],
+                        "next_lottery_block": act_data["next_lottery_block"],
+                        "blocks_until_lottery": act_data["blocks_until_lottery"],
+                        "formula_weights": act_data["formula_weights"]
                     })
 
                 elif url == "/operator/status":
@@ -1957,16 +2473,19 @@ class NodeServer:
                     })
 
                 elif url == "/orders":
-                    with node.state.lock:
-                        orders_list = list(node.state.orders.values())
+                    eff_state = node.get_effective_state()
+                    orders_list = list(eff_state.orders.values())
                     self.send_json(200, {
                         "orders": orders_list
                     })
 
                 elif url.startswith("/account/"):
                     acc_id = url.split("/account/")[1]
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id)
+                        if not acc:
+                            acc = node.state.accounts.get(acc_id)
                         if not acc:
                             with node.mempool_lock:
                                 for mtx in node.mempool:
@@ -1974,6 +2493,9 @@ class NodeServer:
                                         p = mtx["payload"]
                                         acc = {
                                             "balances": {"CSP": 0.0, "BDP": float(p.get("initial_bdp", DEFAULT_SIGNUP_BDP))},
+                                            "frozen_balances": {"CSP": 0.0, "BDP": float(p.get("initial_bdp", DEFAULT_SIGNUP_BDP))},
+                                            "is_verified": False,
+                                            "verification_status": "PENDING",
                                             "nonce": 0,
                                             "salt": p.get("salt"),
                                             "public_key": p.get("public_key"),
@@ -1992,40 +2514,46 @@ class NodeServer:
                             "tx_count": 0, "volume_csp": 0.0, "volume_bdp": 0.0,
                             "fees_paid_csp": 0.0, "fees_paid_bdp": 0.0, "score": 0.0
                         })
-                        with node.mempool_lock:
-                            pending_tx_count = sum(1 for t in node.mempool if t.get("sender") == acc_id and t.get("action") != "ACCOUNT_REGISTER")
-                        effective_nonce = acc.get("nonce", 0) + pending_tx_count
+
+                        eff_act = node.get_student_activity_data(eff_state)
+                        stud_entry = eff_act["student_map"].get(acc_id)
 
                         self.send_json(200, {
                             "account_id": acc_id,
-                            "balances": acc["balances"],
+                            "balances": acc.get("balances", {"CSP": 0.0, "BDP": 0.0}),
                             "frozen_balances": acc.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0}),
                             "is_verified": acc.get("is_verified", False),
                             "verification_status": acc.get("verification_status", "PENDING" if float(acc.get("frozen_balances", {}).get("BDP", 0.0)) > 0 else "VERIFIED"),
-                            "nonce": effective_nonce,
+                            "nonce": acc.get("nonce", 0),
                             "salt": acc.get("salt"),
                             "public_key": acc.get("public_key"),
-                            "last_active": acc["last_active"],
+                            "last_active": acc.get("last_active", time.time()),
                             "is_poa_active": acc_id in node.active_accounts,
                             "poa_score": act_data.get("score", 0.0),
-                            "activity": act_data
+                            "activity": act_data,
+                            "activity_score": stud_entry.get("activity_score", 0.0) if stud_entry else 0.0,
+                            "activity_rank": stud_entry.get("rank", 0) if stud_entry else 0,
+                            "lottery_tickets": stud_entry.get("tickets", 1.0) if stud_entry else 1.0,
+                            "win_probability_pct": stud_entry.get("win_probability_pct", 0.0) if stud_entry else 0.0,
+                            "activity_breakdown": stud_entry.get("breakdown", {}) if stud_entry else {}
                         })
 
                 elif url == "/accounts":
-                    with node.state.lock:
-                        accounts_list = [
-                            {
-                                "account_id": a_id,
-                                "balances": a_data.get("balances", {}),
-                                "frozen_balances": a_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0}),
-                                "is_verified": a_data.get("is_verified", False),
-                                "verification_status": a_data.get("verification_status", "PENDING" if float(a_data.get("frozen_balances", {}).get("BDP", 0.0)) > 0 else "VERIFIED"),
-                                "nonce": a_data.get("nonce", 0),
-                                "public_key": a_data.get("public_key"),
-                                "last_active": a_data.get("last_active", 0.0)
-                            }
-                            for a_id, a_data in sorted(node.state.accounts.items())
-                        ]
+                    eff_state = node.get_effective_state()
+                    accounts_list = [
+                        {
+                            "account_id": a_id,
+                            "balances": a_data.get("balances", {}),
+                            "frozen_balances": a_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0}),
+                            "is_verified": a_data.get("is_verified", False),
+                            "verification_status": a_data.get("verification_status", "PENDING" if float(a_data.get("frozen_balances", {}).get("BDP", 0.0)) > 0 else "VERIFIED"),
+                            "nonce": a_data.get("nonce", 0),
+                            "public_key": a_data.get("public_key"),
+                            "last_active": a_data.get("last_active", 0.0),
+                            "is_group_account": a_data.get("is_group_account", False)
+                        }
+                        for a_id, a_data in sorted(eff_state.accounts.items())
+                    ]
                     self.send_json(200, {"accounts": accounts_list})
 
                 elif url == "/peers":
@@ -2049,13 +2577,36 @@ class NodeServer:
                             recipient = p.get("recipient") or p.get("maker") or p.get("worker") or p.get("account_id")
                             creator = p.get("creator")
                             if not target_account or target_account in (sender, recipient, creator):
+                                m_act = mtx.get("action")
+                                m_tok = p.get("token") or p.get("offer_token") or p.get("wage_token") or "CSP"
+                                m_amt = float(p.get("amount") or p.get("offer_amount") or p.get("wage") or 0.0)
+                                if m_act == "POA_REWARD":
+                                    m_tok = "CSP"
+                                    m_amt = float(p.get("total_csp") or p.get("base_reward_csp") or p.get("amount") or 10.0)
+                                elif m_act == "ACCOUNT_REGISTER":
+                                    m_tok = "BDP"
+                                    m_amt = float(p.get("initial_bdp") or 100.0)
+                                    recipient = p.get("account_id") or sender
+                                elif m_act == "ACCOUNT_VERIFY":
+                                    m_tok = "BDP"
+                                    m_amt = 100.0 if p.get("status") == "VERIFIED" else 0.0
+                                    recipient = p.get("account_id") or recipient
+                                elif m_act == "ORDER_CANCEL":
+                                    m_tok = p.get("offer_token") or m_tok
+                                    m_amt = float(p.get("offer_amount") or m_amt)
+                                elif m_act == "ORDER_FULFILL":
+                                    m_tok = p.get("offer_token") or p.get("request_token") or m_tok
+                                    m_amt = float(p.get("take_offer") or p.get("fill_amount") or p.get("paid_request") or m_amt)
+                                    if not recipient:
+                                        recipient = p.get("maker")
+
                                 all_txs.append({
                                     "tx_id": mtx.get("tx_id") or hash_data(mtx),
-                                    "action": mtx.get("action"),
+                                    "action": m_act,
                                     "sender": sender,
                                     "recipient": recipient,
-                                    "token": p.get("token") or p.get("offer_token") or p.get("wage_token") or "CSP",
-                                    "amount": p.get("amount") or p.get("offer_amount") or p.get("wage") or 0.0,
+                                    "token": m_tok,
+                                    "amount": m_amt,
                                     "fee": mtx.get("fee", 0.0),
                                     "fee_token": mtx.get("fee_token", "CSP"),
                                     "timestamp": mtx.get("timestamp", time.time()),
@@ -2099,9 +2650,17 @@ class NodeServer:
                                     })
 
                     all_txs.sort(key=lambda x: float(x.get("timestamp") or 0), reverse=True)
+                    seen_tx_ids = set()
+                    unique_txs = []
+                    for t in all_txs:
+                        tid = t.get("tx_id")
+                        if tid not in seen_tx_ids:
+                            seen_tx_ids.add(tid)
+                            unique_txs.append(t)
+                    all_txs = unique_txs
 
                     total = max(total_db, len(all_txs))
-                    paged = all_txs[:limit]
+                    paged = all_txs[offset:offset+limit] if offset > 0 else all_txs[:limit]
                     self.send_json(200, {
                         "total": total,
                         "offset": offset,
@@ -2116,14 +2675,16 @@ class NodeServer:
                     job_type = params.get("type", [None])[0]
                     difficulty = params.get("difficulty", [None])[0]
                     creator = params.get("creator", [None])[0]
+                    viewer = params.get("viewer", [None])[0] or params.get("account", [None])[0]
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
                         # Purge test jobs
-                        node.state.marketplace_jobs = {
-                            k: v for k, v in node.state.marketplace_jobs.items()
+                        m_jobs = {
+                            k: v for k, v in eff_state.marketplace_jobs.items()
                             if "design test flyer" not in v.get("title", "").lower() and k != "d28b089116d45afa"
                         }
-                        jobs = list(node.state.marketplace_jobs.values())
+                        jobs = list(m_jobs.values())
 
                     filtered = []
                     for j in jobs:
@@ -2135,7 +2696,22 @@ class NodeServer:
                             continue
                         if creator and j.get("creator") != creator:
                             continue
-                        filtered.append(j)
+
+                        job_copy = dict(j)
+                        if not viewer:
+                            job_copy.pop("secret_code", None)
+                        else:
+                            is_creator = (j.get("creator") == viewer or j.get("author") == viewer)
+                            team_name = j.get("team_name")
+                            is_team_member = False
+                            if team_name:
+                                grp = eff_state.groups.get(team_name, {})
+                                if viewer in grp.get("members", {}):
+                                    is_team_member = True
+                            if not (is_creator or is_team_member):
+                                job_copy.pop("secret_code", None)
+
+                        filtered.append(job_copy)
 
                     filtered.sort(key=lambda x: x.get("created_at", 0), reverse=True)
                     self.send_json(200, {
@@ -2174,19 +2750,19 @@ class NodeServer:
                     self.send_json(200, {"contract": c_copy})
 
                 elif url == "/groups":
-                    with node.state.lock:
-                        groups_list = [
-                            {
-                                "name": g["name"],
-                                "description": g["description"],
-                                "entrance_fee": g["entrance_fee"],
-                                "created_at": g["created_at"],
-                                "creator": g["creator"],
-                                "member_count": len(g["members"]),
-                                "balance": node.state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0)
-                            }
-                            for g in node.state.groups.values()
-                        ]
+                    eff_state = node.get_effective_state()
+                    groups_list = [
+                        {
+                            "name": g["name"],
+                            "description": g["description"],
+                            "entrance_fee": g["entrance_fee"],
+                            "created_at": g["created_at"],
+                            "creator": g["creator"],
+                            "member_count": len(g.get("members", {})),
+                            "balance": eff_state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0)
+                        }
+                        for g in eff_state.groups.values()
+                    ]
                     groups_list.sort(key=lambda x: x.get("created_at", 0), reverse=True)
                     self.send_json(200, {"groups": groups_list, "total": len(groups_list)})
 
@@ -2197,22 +2773,21 @@ class NodeServer:
                     if not gname:
                         self.send_json(400, {"error": "Parameter 'name' is required"})
                         return
-                    with node.state.lock:
-                        group = node.state.groups.get(gname)
-                        if not group:
-                            self.send_json(404, {"error": f"Group '{gname}' not found"})
-                            return
-                        g_copy = copy.deepcopy(group)
-                        g_copy["balance"] = node.state.accounts.get(gname, {}).get("balances", {}).get("CSP", 0.0)
-                        # Attach account nicknames/usernames for members
-                        member_details = {}
-                        for mid in g_copy["members"]:
-                            acc = node.state.accounts.get(mid, {})
-                            member_details[mid] = {
-                                **g_copy["members"][mid],
-                                "account_id": mid
-                            }
-                        g_copy["member_details"] = member_details
+                    eff_state = node.get_effective_state()
+                    group = eff_state.groups.get(gname)
+                    if not group:
+                        self.send_json(404, {"error": f"Group '{gname}' not found"})
+                        return
+                    g_copy = copy.deepcopy(group)
+                    g_copy["balance"] = eff_state.accounts.get(gname, {}).get("balances", {}).get("CSP", 0.0)
+                    # Attach account nicknames/usernames for members
+                    member_details = {}
+                    for mid in g_copy.get("members", {}):
+                        member_details[mid] = {
+                            **g_copy["members"][mid],
+                            "account_id": mid
+                        }
+                    g_copy["member_details"] = member_details
                     self.send_json(200, {"group": g_copy})
 
                 elif url == "/groups/member":
@@ -2222,38 +2797,72 @@ class NodeServer:
                     if not account:
                         self.send_json(400, {"error": "Parameter 'account' is required"})
                         return
-                    with node.state.lock:
-                        my_groups = [
-                            {
-                                "name": g["name"],
-                                "description": g["description"],
-                                "entrance_fee": g["entrance_fee"],
-                                "created_at": g["created_at"],
-                                "creator": g["creator"],
-                                "member_count": len(g["members"]),
-                                "balance": node.state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0),
-                                "is_creator": g["creator"] == account,
-                                "pending_polls": sum(1 for p in g["polls"].values() if p["status"] == "OPEN"),
-                                "pending_invitations": sum(1 for inv in g["invitations"] if inv["invitee"] == account)
-                            }
-                            for g in node.state.groups.values()
-                            if account in g["members"]
-                        ]
-                        # Also include groups where account has a pending invitation
-                        pending_invites = [
-                            {
-                                "name": g["name"],
-                                "description": g["description"],
-                                "entrance_fee": g["entrance_fee"],
-                                "creator": g["creator"],
-                                "member_count": len(g["members"]),
-                                "balance": node.state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0),
-                                "invitation_from": next(i["inviter"] for i in g["invitations"] if i["invitee"] == account)
-                            }
-                            for g in node.state.groups.values()
-                            if account not in g["members"] and any(i["invitee"] == account for i in g["invitations"])
-                        ]
+                    eff_state = node.get_effective_state()
+                    my_groups = [
+                        {
+                            "name": g["name"],
+                            "description": g["description"],
+                            "entrance_fee": g["entrance_fee"],
+                            "created_at": g["created_at"],
+                            "creator": g["creator"],
+                            "member_count": len(g.get("members", {})),
+                            "balance": eff_state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0),
+                            "is_creator": g["creator"] == account,
+                            "pending_polls": sum(1 for p in g.get("polls", {}).values() if p.get("status") == "OPEN"),
+                            "pending_invitations": sum(1 for inv in g.get("invitations", []) if inv.get("invitee") == account)
+                        }
+                        for g in eff_state.groups.values()
+                        if account in g.get("members", {})
+                    ]
+                    # Also include groups where account has a pending invitation
+                    pending_invites = [
+                        {
+                            "name": g["name"],
+                            "description": g["description"],
+                            "entrance_fee": g["entrance_fee"],
+                            "creator": g["creator"],
+                            "member_count": len(g.get("members", {})),
+                            "balance": eff_state.accounts.get(g["name"], {}).get("balances", {}).get("CSP", 0.0),
+                            "invitation_from": next((i["inviter"] for i in g.get("invitations", []) if i.get("invitee") == account), "")
+                        }
+                        for g in eff_state.groups.values()
+                        if account not in g.get("members", {}) and any(i.get("invitee") == account for i in g.get("invitations", []))
+                    ]
                     self.send_json(200, {"my_groups": my_groups, "pending_invites": pending_invites})
+
+                elif url == "/mempool":
+                    with node.mempool_lock:
+                        mempool_copy = copy.deepcopy(node.mempool)
+                    formatted = []
+                    for mtx in reversed(mempool_copy):
+                        sender = mtx.get("sender")
+                        p = mtx.get("payload", {})
+                        recipient = p.get("recipient") or p.get("maker") or p.get("worker") or p.get("account_id") or p.get("invitee") or p.get("creator") or p.get("group_name")
+                        m_act = mtx.get("action")
+                        m_tok = p.get("token") or p.get("offer_token") or p.get("wage_token") or "CSP"
+                        m_amt = float(p.get("amount") or p.get("offer_amount") or p.get("wage") or 0.0)
+                        if m_act == "POA_REWARD":
+                            m_tok = "CSP"
+                            m_amt = float(p.get("total_csp") or p.get("base_reward_csp") or 10.0)
+                        elif m_act in ("ACCOUNT_REGISTER", "ACCOUNT_VERIFY"):
+                            m_tok = "BDP"
+                            m_amt = float(p.get("initial_bdp") or 100.0)
+
+                        formatted.append({
+                            "tx_id": mtx.get("tx_id") or hash_data(mtx),
+                            "action": m_act,
+                            "sender": sender,
+                            "recipient": recipient,
+                            "token": m_tok,
+                            "amount": m_amt,
+                            "fee": mtx.get("fee", 0.0),
+                            "fee_token": mtx.get("fee_token", "CSP"),
+                            "timestamp": mtx.get("timestamp", time.time()),
+                            "status": "PENDING",
+                            "nonce": mtx.get("nonce", 0),
+                            "payload": p
+                        })
+                    self.send_json(200, {"mempool": formatted, "count": len(formatted)})
 
                 else:
                     self.send_json(404, {"error": "Not Found"})
@@ -2271,62 +2880,110 @@ class NodeServer:
                     return
 
                 if url == "/login":
-                    acc_id = payload.get("account_id")
-                    pwd = payload.get("password")
-                    if node.state.verify_account(acc_id, pwd):
+                    raw_id = payload.get("account_id") or ""
+                    acc_id = raw_id.strip().lstrip("@")
+                    pwd = payload.get("password") or ""
+                    if not acc_id or not pwd:
+                        self.send_json(400, {"error": "account_id and password required"})
+                        return
+
+                    eff_state = node.get_effective_state()
+                    actual_acc_id = node.state.resolve_account_id(acc_id)
+                    verified = False
+                    if actual_acc_id and node.state.verify_account(actual_acc_id, pwd):
+                        verified = True
+                    else:
+                        actual_acc_id = eff_state.resolve_account_id(acc_id)
+                        if actual_acc_id and eff_state.verify_account(actual_acc_id, pwd):
+                            verified = True
+
+                    if verified and actual_acc_id:
+                        acc_data = eff_state.accounts.get(actual_acc_id) or node.state.accounts.get(actual_acc_id)
+                        if not acc_data:
+                            self.send_json(401, {"error": "Invalid account credentials"})
+                            return
+
                         token = secrets.token_hex(24)
-                        node.session_tokens[token] = acc_id
-                        node.register_client_activity(acc_id)
-                        acc_data = node.state.accounts[acc_id]
+                        node.session_tokens[token] = actual_acc_id
+                        node.register_client_activity(actual_acc_id)
                         salt = acc_data.get("salt", "")
                         privkey, pub_hex = derive_account_keypair(pwd, salt)
+                        balances = eff_state.get_balances(actual_acc_id)
+                        frozen_balances = acc_data.get("frozen_balances", {"CSP": 0.0, "BDP": 0.0})
+                        is_verified = acc_data.get("is_verified", False)
+                        ver_status = acc_data.get("verification_status", "PENDING" if float(frozen_balances.get("BDP", 0.0)) > 0 else "VERIFIED")
+
+                        # Forge pending block if mempool has unconfirmed transactions
+                        with node.mempool_lock:
+                            has_txs = bool(node.mempool)
+                        if has_txs:
+                            threading.Thread(target=node.forge_block, daemon=True).start()
+
                         self.send_json(200, {
                             "success": True,
                             "token": token,
-                            "account_id": acc_id,
+                            "account_id": actual_acc_id,
                             "salt": salt,
                             "public_key": acc_data.get("public_key") or pub_hex,
                             "private_key": f"{privkey:064x}",
                             "nonce": acc_data.get("nonce", 0),
-                            "balances": node.state.get_balances(acc_id)
+                            "balances": balances,
+                            "frozen_balances": frozen_balances,
+                            "is_verified": is_verified,
+                            "verification_status": ver_status
                         })
                     else:
                         self.send_json(401, {"error": "Invalid account credentials"})
 
                 elif url == "/operator/login":
-                    acc_id = payload.get("account_id")
-                    pwd = payload.get("password")
+                    raw_id = payload.get("account_id") or ""
+                    acc_id = raw_id.strip().lstrip("@")
+                    pwd = payload.get("password") or ""
                     if not acc_id or not pwd:
                         self.send_json(400, {"error": "account_id and password required"})
                         return
-                    if node.state.verify_account(acc_id, pwd):
-                        node.account_id = acc_id
+
+                    eff_state = node.get_effective_state()
+                    actual_acc_id = node.state.resolve_account_id(acc_id)
+                    verified = False
+                    if actual_acc_id and node.state.verify_account(actual_acc_id, pwd):
+                        verified = True
+                    else:
+                        actual_acc_id = eff_state.resolve_account_id(acc_id)
+                        if actual_acc_id and eff_state.verify_account(actual_acc_id, pwd):
+                            verified = True
+
+                    if verified and actual_acc_id:
+                        node.account_id = actual_acc_id
                         node.password = pwd
-                        node.state.record_activity(acc_id)
+                        node.state.record_activity(actual_acc_id)
                         with node.activity_lock:
-                            node.active_accounts[acc_id] = {
+                            node.active_accounts[actual_acc_id] = {
                                 "last_seen": time.time(),
                                 "heartbeat_count": 1,
                                 "nonce": secrets.token_hex(8)
                             }
-                        print(f"[*] Node operator attached: '{acc_id}' (mining rewards active)")
+                        print(f"[*] Node operator attached: '{actual_acc_id}' (mining rewards active)")
                         self.send_json(200, {
                             "success": True,
-                            "message": f"Node operator connected to '{acc_id}'",
-                            "operator_account": acc_id
+                            "message": f"Node operator connected to '{actual_acc_id}'",
+                            "operator_account": actual_acc_id
                         })
                     else:
                         self.send_json(401, {"error": "Invalid account credentials"})
 
                 elif url == "/register":
-                    acc_id = payload.get("account_id")
-                    pwd = payload.get("password")
+                    raw_id = payload.get("account_id") or ""
+                    acc_id = raw_id.strip().lstrip("@")
+                    pwd = payload.get("password") or ""
+                    student_id = (payload.get("student_id") or "").strip()
                     if not acc_id or not pwd:
                         self.send_json(400, {"error": "account_id and password required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        if acc_id in node.state.accounts:
+                        if acc_id in node.state.accounts or acc_id in eff_state.accounts or node.state.resolve_account_id(acc_id) is not None:
                             self.send_json(400, {"error": f"Account '{acc_id}' already exists"})
                             return
 
@@ -2343,6 +3000,7 @@ class NodeServer:
                             "password_hash": pwd_hash,
                             "salt": salt,
                             "public_key": pub_hex,
+                            "student_id": student_id,
                             "initial_bdp": DEFAULT_SIGNUP_BDP
                         },
                         "nonce": 0,
@@ -2355,6 +3013,9 @@ class NodeServer:
                     if not ok:
                         self.send_json(400, {"error": msg})
                         return
+
+                    # Trigger block forge immediately
+                    threading.Thread(target=node.forge_block, daemon=True).start()
 
                     token = secrets.token_hex(24)
                     node.session_tokens[token] = acc_id
@@ -2437,23 +3098,24 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "creator and positive wage are required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
                         if team_name:
-                            group = node.state.groups.get(team_name)
+                            group = eff_state.groups.get(team_name) or node.state.groups.get(team_name)
                             if not group:
                                 self.send_json(404, {"success": False, "error": f"Team '{team_name}' not found"})
                                 return
                             if author not in group["members"]:
                                 self.send_json(403, {"success": False, "error": f"Account '{author}' is not a member of team '{team_name}'"})
                                 return
-                            creator_acc = node.state.accounts.get(team_name)
+                            creator_acc = eff_state.accounts.get(team_name) or node.state.accounts.get(team_name)
                             if not creator_acc:
                                 self.send_json(404, {"success": False, "error": f"Team account '{team_name}' not found"})
                                 return
                             wage_token = "CSP"  # Teams only work with CSP
                             app_type = "team application"
                         else:
-                            creator_acc = node.state.accounts.get(creator)
+                            creator_acc = eff_state.accounts.get(creator) or node.state.accounts.get(creator)
                             if not creator_acc:
                                 self.send_json(404, {"success": False, "error": f"Account {creator} not found"})
                                 return
@@ -2481,24 +3143,26 @@ class NodeServer:
                                 "wage": wage,
                                 "wage_token": wage_token,
                                 "secret_hash": secret_hash,
+                                "secret_code": payload.get("secret_code"),
                                 "author": f"Team: {team_name} (by {author})" if team_name else author,
                                 "team_name": team_name
                             },
                             "nonce": creator_acc["nonce"],
                             "timestamp": time.time(),
+                            "fee": 0.0,
                             "signature": "DIRECT_MARKETPLACE"
                         }
-                        ok, msg = node.submit_tx(create_tx)
-                        if ok:
-                            node.forge_block()
-                            self.send_json(200, {
-                                "success": True,
-                                "message": msg,
-                                "job_id": job_id,
-                                "tx_id": create_tx["tx_id"]
-                            })
-                        else:
-                            self.send_json(400, {"success": False, "error": msg})
+                    ok, msg = node.submit_tx(create_tx)
+                    if ok:
+                        node.forge_block()
+                        self.send_json(200, {
+                            "success": True,
+                            "message": msg,
+                            "job_id": job_id,
+                            "tx_id": create_tx["tx_id"]
+                        })
+                    else:
+                        self.send_json(400, {"success": False, "error": msg})
 
                 elif url == "/marketplace/claim":
                     acc_id = payload.get("account_id")
@@ -2509,8 +3173,9 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "account_id, job_id, and secret_code required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        job = node.state.marketplace_jobs.get(job_id)
+                        job = eff_state.marketplace_jobs.get(job_id) or node.state.marketplace_jobs.get(job_id)
                         if not job:
                             self.send_json(404, {"success": False, "error": f"Application {job_id} not found"})
                             return
@@ -2521,7 +3186,7 @@ class NodeServer:
                             self.send_json(400, {"success": False, "error": "You cannot claim your own application!"})
                             return
 
-                        worker_acc = node.state.accounts.get(acc_id)
+                        worker_acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not worker_acc:
                             self.send_json(404, {"success": False, "error": f"Account {acc_id} not found"})
                             return
@@ -2531,22 +3196,30 @@ class NodeServer:
                             failed_map = job.setdefault("failed_attempts", {})
                             fails = failed_map.get(acc_id, 0) + 1
                             failed_map[acc_id] = fails
+                            if job_id in node.state.marketplace_jobs:
+                                node.state.marketplace_jobs[job_id].setdefault("failed_attempts", {})[acc_id] = fails
                             fined = False
+                            actual_w = node.state.accounts.get(acc_id)
+                            curr_csp = worker_acc["balances"].get("CSP", 0.0)
                             if fails > 3:
                                 fined = True
                                 fine_amount = 10.0
-                                worker_acc["balances"]["CSP"] = round(max(0.0, worker_acc["balances"]["CSP"] - fine_amount), 6)
+                                if actual_w:
+                                    actual_w["balances"]["CSP"] = round(max(0.0, actual_w["balances"].get("CSP", 0.0) - fine_amount), 6)
+                                    curr_csp = actual_w["balances"]["CSP"]
+                                else:
+                                    worker_acc["balances"]["CSP"] = round(max(0.0, curr_csp - fine_amount), 6)
+                                    curr_csp = worker_acc["balances"]["CSP"]
                                 msg = f"Incorrect code! You exceeded 3 attempts (attempt #{fails}) and have been fined 10 CSP."
                             else:
-                                msg = f"Incorrect secret code! Attempt {fails}/3. (More than 3 failed attempts will trigger a 10 CSP fine)"
+                                msg = f"Incorrect code! Attempt #{fails}/3. (Penalty: 10 CSP fine after 3 fails)"
 
                             self.send_json(400, {
                                 "success": False,
                                 "error": msg,
                                 "failed_attempts": fails,
                                 "fined": fined,
-                                "fine_amount": 10.0 if fined else 0.0,
-                                "remaining_csp": worker_acc["balances"]["CSP"]
+                                "remaining_balance": curr_csp
                             })
                             return
 
@@ -2568,15 +3241,16 @@ class NodeServer:
                         },
                         "nonce": worker_nonce,
                         "timestamp": time.time(),
+                        "fee": 0.0,
                         "signature": "DIRECT_CLAIM"
                     }
 
                     ok, msg = node.submit_tx(claim_tx)
                     if ok:
-                        # Immediately mine into PoA block
                         node.forge_block()
+                        eff_after = node.get_effective_state()
                         with node.state.lock:
-                            w_acc = node.state.accounts.get(acc_id)
+                            w_acc = eff_after.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                             new_bal = w_acc["balances"].get(wage_token, 0.0) if w_acc else 0.0
                         self.send_json(200, {
                             "success": True,
@@ -2585,6 +3259,63 @@ class NodeServer:
                             "wage_token": wage_token,
                             "new_balance": new_bal,
                             "tx_id": claim_tx["tx_id"]
+                        })
+                    else:
+                        self.send_json(400, {"success": False, "error": msg})
+
+                elif url == "/marketplace/cancel":
+                    acc_id = payload.get("account_id")
+                    job_id = payload.get("job_id")
+                    if not acc_id or not job_id:
+                        self.send_json(400, {"success": False, "error": "account_id and job_id required"})
+                        return
+
+                    eff_state = node.get_effective_state()
+                    with node.state.lock:
+                        job = eff_state.marketplace_jobs.get(job_id) or node.state.marketplace_jobs.get(job_id)
+                        if not job:
+                            self.send_json(404, {"success": False, "error": f"Application '{job_id}' not found"})
+                            return
+                        if job["status"] != "OPEN":
+                            self.send_json(400, {"success": False, "error": f"Application is already {job['status']}"})
+                            return
+
+                        is_team_app = bool(job.get("team_name"))
+                        group = eff_state.groups.get(job.get("team_name")) if is_team_app else None
+                        is_team_member = group and acc_id in group.get("members", {})
+                        is_author = job.get("author") == acc_id
+                        is_creator = job.get("creator") == acc_id
+
+                        if not (is_creator or is_author or (is_team_app and is_team_member)):
+                            self.send_json(403, {"success": False, "error": "Only application creator or team member can cancel"})
+                            return
+
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
+                        if not acc:
+                            self.send_json(404, {"success": False, "error": f"Account {acc_id} not found"})
+                            return
+                        nonce = acc["nonce"]
+
+                        cancel_tx = {
+                            "tx_id": hash_data(f"TX_MKT_CANCEL_{job_id}_{acc_id}_{time.time()}"),
+                            "sender": acc_id,
+                            "action": "MARKETPLACE_CANCEL",
+                            "payload": {
+                                "job_id": job_id
+                            },
+                            "nonce": nonce,
+                            "timestamp": time.time(),
+                            "fee": 0.0,
+                            "signature": "DIRECT_MARKETPLACE"
+                        }
+                    ok, msg = node.submit_tx(cancel_tx)
+                    if ok:
+                        node.forge_block()
+                        self.send_json(200, {
+                            "success": True,
+                            "message": msg,
+                            "job_id": job_id,
+                            "tx_id": cancel_tx["tx_id"]
                         })
                     else:
                         self.send_json(400, {"success": False, "error": msg})
@@ -2601,8 +3332,9 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "'sender' and 'code' are required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        sender_acc = node.state.accounts.get(sender)
+                        sender_acc = eff_state.accounts.get(sender) or node.state.accounts.get(sender)
                         if not sender_acc:
                             self.send_json(404, {"success": False, "error": f"Account '{sender}' not found"})
                             return
@@ -2650,12 +3382,13 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "'sender', 'contract_id', and 'method' are required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        sender_acc = node.state.accounts.get(sender)
+                        sender_acc = eff_state.accounts.get(sender) or node.state.accounts.get(sender)
                         if not sender_acc:
                             self.send_json(404, {"success": False, "error": f"Account '{sender}' not found"})
                             return
-                        if contract_id not in node.state.contracts:
+                        if contract_id not in eff_state.contracts and contract_id not in node.state.contracts:
                             self.send_json(404, {"success": False, "error": f"Contract '{contract_id}' not found"})
                             return
                         nonce = sender_acc["nonce"]
@@ -2743,12 +3476,13 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "Initial deposit cannot be negative"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
-                        if group_name in node.state.groups:
+                        if group_name in eff_state.groups or group_name in node.state.groups:
                             self.send_json(400, {"success": False, "error": f"Team '{group_name}' already exists"})
                             return
                         if initial_deposit > 0.0 and acc["balances"].get("CSP", 0.0) < initial_deposit:
@@ -2783,12 +3517,13 @@ class NodeServer:
                     if not acc_id or not group_name:
                         self.send_json(400, {"success": False, "error": "account_id and group_name required"})
                         return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
-                        group = node.state.groups.get(group_name)
+                        group = eff_state.groups.get(group_name) or node.state.groups.get(group_name)
                         if not group:
                             self.send_json(404, {"success": False, "error": f"Team '{group_name}' not found"})
                             return
@@ -2823,19 +3558,20 @@ class NodeServer:
                         self.send_json(400, {"success": False, "error": "account_id, group_name, recipient, and positive amount required"})
                         return
 
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        group = node.state.groups.get(group_name)
+                        group = eff_state.groups.get(group_name) or node.state.groups.get(group_name)
                         if not group:
                             self.send_json(404, {"success": False, "error": f"Team '{group_name}' not found"})
                             return
                         if acc_id not in group["members"]:
                             self.send_json(403, {"success": False, "error": f"Account '{acc_id}' is not an authorized member of team '{group_name}'"})
                             return
-                        group_acc = node.state.accounts.get(group_name)
+                        group_acc = eff_state.accounts.get(group_name) or node.state.accounts.get(group_name)
                         if not group_acc:
                             self.send_json(404, {"success": False, "error": f"Team account '{group_name}' not found"})
                             return
-                        if recipient not in node.state.accounts:
+                        if recipient not in eff_state.accounts and recipient not in node.state.accounts:
                             self.send_json(404, {"success": False, "error": f"Recipient '{recipient}' does not exist"})
                             return
 
@@ -2875,9 +3611,9 @@ class NodeServer:
 
                     if not acc_id or not group_name or not invitee:
                         self.send_json(400, {"success": False, "error": "account_id, group_name, invitee required"})
-                        return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
@@ -2906,8 +3642,9 @@ class NodeServer:
                     if not acc_id or not group_name:
                         self.send_json(400, {"success": False, "error": "account_id and group_name required"})
                         return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
@@ -2939,8 +3676,9 @@ class NodeServer:
                     if not acc_id or not group_name or not poll_type or not title:
                         self.send_json(400, {"success": False, "error": "account_id, group_name, poll_type, title required"})
                         return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
@@ -2976,8 +3714,9 @@ class NodeServer:
                     if not acc_id or not group_name or not poll_id:
                         self.send_json(400, {"success": False, "error": "account_id, group_name, poll_id required"})
                         return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
@@ -2996,8 +3735,9 @@ class NodeServer:
                     if ok:
                         node.forge_block()
                         # Return updated poll status
+                        eff_poll = node.get_effective_state()
                         with node.state.lock:
-                            g = node.state.groups.get(group_name, {})
+                            g = eff_poll.groups.get(group_name, {}) or node.state.groups.get(group_name, {})
                             p = g.get("polls", {}).get(poll_id, {})
                         self.send_json(200, {"success": True, "message": msg, "poll_status": p.get("status", "OPEN")})
                     else:
@@ -3011,8 +3751,9 @@ class NodeServer:
                     if not acc_id or not group_name or not poll_id:
                         self.send_json(400, {"success": False, "error": "account_id, group_name, poll_id required"})
                         return
+                    eff_state = node.get_effective_state()
                     with node.state.lock:
-                        acc = node.state.accounts.get(acc_id)
+                        acc = eff_state.accounts.get(acc_id) or node.state.accounts.get(acc_id)
                         if not acc:
                             self.send_json(404, {"success": False, "error": f"Account '{acc_id}' not found"})
                             return
@@ -3241,7 +3982,12 @@ class NodeServer:
                 else:
                     print(f"[!] Unknown command '{cmd}'. Type 'help' for available commands.")
 
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
+                # Stdin closed or non-interactive IDE runner; keep node server running in background
+                while self.running:
+                    time.sleep(1)
+                break
+            except KeyboardInterrupt:
                 print("\n[*] Exiting node operator console...")
                 self.running = False
                 break
@@ -3363,7 +4109,9 @@ def main():
     parser = argparse.ArgumentParser(description="CSII-Pay 2-Layer Cryptocurrency Node")
     parser.add_argument("--account", type=str, default=None, help="Operator account ID")
     parser.add_argument("--password", type=str, default=None, help="Operator password")
-    parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help=f"HTTP API Port (Default: {DEFAULT_HTTP_PORT})")
+    env_port = os.environ.get("PORT")
+    default_port = int(env_port) if env_port else DEFAULT_HTTP_PORT
+    parser.add_argument("--port", type=int, default=default_port, help=f"HTTP API Port (Default: {default_port})")
     parser.add_argument("--udp-port", type=int, default=DEFAULT_UDP_PORT, help=f"UDP Broadcast Port (Default: {DEFAULT_UDP_PORT})")
     parser.add_argument("--peer", type=str, default=None, help="Initial peer to connect to, e.g. http://192.168.1.50:8000")
     parser.add_argument("--data-dir", type=str, default=".", help="Data directory for chain persistence")
@@ -3376,7 +4124,7 @@ def main():
     active_peers = discover_active_network_nodes(args.udp_port, args.peer, args.port, timeout=1.2)
 
     target_port = args.port
-    if is_port_in_use(target_port, "0.0.0.0"):
+    if not env_port and is_port_in_use(target_port, "0.0.0.0"):
         local_peer_url = f"http://127.0.0.1:{target_port}"
         try:
             req = urllib.request.Request(f"{local_peer_url}/status", headers={"User-Agent": "CSII-Pay-Probe"})

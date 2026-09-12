@@ -521,16 +521,20 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                           decoration: BoxDecoration(
                             gradient: AppColors.bdpGradient,
                             borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0xFFD4AF37).withValues(alpha: 0.6),
+                              width: 1.2,
+                            ),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'BDP (Layer 2)',
+                                'Character Points (BDP)',
                                 style: GoogleFonts.outfit(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.white.withValues(alpha: 0.8),
+                                  color: const Color(0xFFE5C058),
                                 ),
                               ),
                               const SizedBox(height: 2),
@@ -539,7 +543,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                                 style: GoogleFonts.outfit(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white,
+                                  color: const Color(0xFFFFF7E2),
                                 ),
                               ),
                             ],

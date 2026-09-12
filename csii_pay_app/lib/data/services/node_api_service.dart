@@ -12,6 +12,8 @@ class NodeStatus {
   final int mempoolSize;
   final int activeUsersCount;
   final String consensus;
+  final int nextLotteryBlock;
+  final int blocksUntilLottery;
 
   const NodeStatus({
     required this.nodeId,
@@ -24,6 +26,8 @@ class NodeStatus {
     required this.mempoolSize,
     required this.activeUsersCount,
     required this.consensus,
+    this.nextLotteryBlock = 10,
+    this.blocksUntilLottery = 10,
   });
 
   factory NodeStatus.fromJson(Map<String, dynamic> j) => NodeStatus(
@@ -37,6 +41,231 @@ class NodeStatus {
         mempoolSize: j['mempool_size'] ?? 0,
         activeUsersCount: j['active_users_count'] ?? 0,
         consensus: j['consensus'] ?? '',
+        nextLotteryBlock: j['next_lottery_block'] ?? 10,
+        blocksUntilLottery: j['blocks_until_lottery'] ?? 10,
+      );
+}
+
+class ActivityBreakdownItem {
+  final double val;
+  final double pts;
+  final double weightPct;
+  final int jobsCount;
+
+  const ActivityBreakdownItem({
+    required this.val,
+    required this.pts,
+    required this.weightPct,
+    this.jobsCount = 0,
+  });
+
+  factory ActivityBreakdownItem.fromJson(Map<String, dynamic> j) =>
+      ActivityBreakdownItem(
+        val: (j['val'] as num? ?? 0).toDouble(),
+        pts: (j['pts'] as num? ?? 0).toDouble(),
+        weightPct: (j['weight_pct'] as num? ?? 0).toDouble(),
+        jobsCount: (j['jobs_count'] as num? ?? 0).toInt(),
+      );
+}
+
+class ActivityBreakdown {
+  final ActivityBreakdownItem monthlyActivity;
+  final ActivityBreakdownItem monthlyCommissions;
+  final ActivityBreakdownItem allTimeActivity;
+  final ActivityBreakdownItem allTimeCommissions;
+  final ActivityBreakdownItem jobsComplexity;
+
+  const ActivityBreakdown({
+    required this.monthlyActivity,
+    required this.monthlyCommissions,
+    required this.allTimeActivity,
+    required this.allTimeCommissions,
+    required this.jobsComplexity,
+  });
+
+  factory ActivityBreakdown.fromJson(Map<String, dynamic> j) =>
+      ActivityBreakdown(
+        monthlyActivity:
+            ActivityBreakdownItem.fromJson(j['monthly_activity'] ?? {}),
+        monthlyCommissions:
+            ActivityBreakdownItem.fromJson(j['monthly_commissions'] ?? {}),
+        allTimeActivity:
+            ActivityBreakdownItem.fromJson(j['all_time_activity'] ?? {}),
+        allTimeCommissions:
+            ActivityBreakdownItem.fromJson(j['all_time_commissions'] ?? {}),
+        jobsComplexity:
+            ActivityBreakdownItem.fromJson(j['jobs_complexity'] ?? {}),
+      );
+}
+
+class StudentTier {
+  final String name;
+  final String badge;
+  final String colorHex;
+  final int rankLevel;
+  final String? nextTier;
+  final double nextThreshold;
+  final double pointsToNext;
+  final double progressPct;
+
+  const StudentTier({
+    required this.name,
+    required this.badge,
+    required this.colorHex,
+    required this.rankLevel,
+    this.nextTier,
+    required this.nextThreshold,
+    required this.pointsToNext,
+    required this.progressPct,
+  });
+
+  factory StudentTier.fromJson(Map<String, dynamic> j) => StudentTier(
+        name: j['name'] ?? 'Bronze Scholar',
+        badge: j['badge'] ?? '🥉 Bronze Scholar',
+        colorHex: j['color'] ?? '#CD7F32',
+        rankLevel: (j['rank_level'] as num? ?? 1).toInt(),
+        nextTier: j['next_tier'],
+        nextThreshold: (j['next_threshold'] as num? ?? 100.0).toDouble(),
+        pointsToNext: (j['points_to_next'] as num? ?? 0.0).toDouble(),
+        progressPct: (j['progress_pct'] as num? ?? 0.0).toDouble(),
+      );
+}
+
+class StudentDiversity {
+  final double multiplier;
+  final bool hasTransfers;
+  final bool hasJobs;
+  final bool hasExchange;
+  final bool hasGroup;
+
+  const StudentDiversity({
+    required this.multiplier,
+    required this.hasTransfers,
+    required this.hasJobs,
+    required this.hasExchange,
+    required this.hasGroup,
+  });
+
+  factory StudentDiversity.fromJson(Map<String, dynamic> j) => StudentDiversity(
+        multiplier: (j['multiplier'] as num? ?? 1.0).toDouble(),
+        hasTransfers: j['has_transfers'] == true,
+        hasJobs: j['has_jobs'] == true,
+        hasExchange: j['has_exchange'] == true,
+        hasGroup: j['has_group'] == true,
+      );
+}
+
+class StudentLeaderboardEntry {
+  final String accountId;
+  final int rank;
+  final double activityScore;
+  final double tickets;
+  final double winProbabilityPct;
+  final int monthlyTxCount;
+  final double monthlyFees;
+  final int allTimeTxCount;
+  final double allTimeFees;
+  final int completedJobsCount;
+  final int jobsScore;
+  final ActivityBreakdown breakdown;
+  final StudentTier? tier;
+  final StudentDiversity? diversity;
+
+  const StudentLeaderboardEntry({
+    required this.accountId,
+    required this.rank,
+    required this.activityScore,
+    required this.tickets,
+    required this.winProbabilityPct,
+    required this.monthlyTxCount,
+    required this.monthlyFees,
+    required this.allTimeTxCount,
+    required this.allTimeFees,
+    required this.completedJobsCount,
+    required this.jobsScore,
+    required this.breakdown,
+    this.tier,
+    this.diversity,
+  });
+
+  factory StudentLeaderboardEntry.fromJson(Map<String, dynamic> j) =>
+      StudentLeaderboardEntry(
+        accountId: j['account_id'] ?? '',
+        rank: (j['rank'] as num? ?? 0).toInt(),
+        activityScore: (j['activity_score'] as num? ?? 0).toDouble(),
+        tickets: (j['tickets'] as num? ?? 1.0).toDouble(),
+        winProbabilityPct: (j['win_probability_pct'] as num? ?? 0).toDouble(),
+        monthlyTxCount: (j['monthly_tx_count'] as num? ?? 0).toInt(),
+        monthlyFees: (j['monthly_fees'] as num? ?? 0).toDouble(),
+        allTimeTxCount: (j['all_time_tx_count'] as num? ?? 0).toInt(),
+        allTimeFees: (j['all_time_fees'] as num? ?? 0).toDouble(),
+        completedJobsCount: (j['completed_jobs_count'] as num? ?? 0).toInt(),
+        jobsScore: (j['jobs_score'] as num? ?? 0).toInt(),
+        breakdown: ActivityBreakdown.fromJson(j['breakdown'] ?? {}),
+        tier: j['tier'] != null ? StudentTier.fromJson(j['tier']) : null,
+        diversity: j['diversity'] != null
+            ? StudentDiversity.fromJson(j['diversity'])
+            : null,
+      );
+}
+
+class LotteryWinner {
+  final int blockHeight;
+  final String recipient;
+  final double amount;
+  final String token;
+  final double timestamp;
+  final double score;
+
+  const LotteryWinner({
+    required this.blockHeight,
+    required this.recipient,
+    required this.amount,
+    required this.token,
+    required this.timestamp,
+    required this.score,
+  });
+
+  factory LotteryWinner.fromJson(Map<String, dynamic> j) => LotteryWinner(
+        blockHeight: (j['block_height'] as num? ?? 0).toInt(),
+        recipient: j['recipient'] ?? '',
+        amount: (j['amount'] as num? ?? 0.1).toDouble(),
+        token: j['token'] ?? 'BDP',
+        timestamp: (j['timestamp'] as num? ?? 0).toDouble(),
+        score: (j['score'] as num? ?? 0).toDouble(),
+      );
+}
+
+class ActivityLeaderboardResponse {
+  final List<StudentLeaderboardEntry> students;
+  final double totalTickets;
+  final List<LotteryWinner> recentLotteryWinners;
+  final int nextLotteryBlock;
+  final int blocksUntilLottery;
+  final Map<String, dynamic> formulaWeights;
+
+  const ActivityLeaderboardResponse({
+    required this.students,
+    required this.totalTickets,
+    required this.recentLotteryWinners,
+    required this.nextLotteryBlock,
+    required this.blocksUntilLottery,
+    required this.formulaWeights,
+  });
+
+  factory ActivityLeaderboardResponse.fromJson(Map<String, dynamic> j) =>
+      ActivityLeaderboardResponse(
+        students: (j['students'] as List? ?? [])
+            .map((e) =>
+                StudentLeaderboardEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        totalTickets: (j['total_tickets'] as num? ?? 0).toDouble(),
+        recentLotteryWinners: (j['recent_lottery_winners'] as List? ?? [])
+            .map((e) => LotteryWinner.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        nextLotteryBlock: (j['next_lottery_block'] as num? ?? 10).toInt(),
+        blocksUntilLottery: (j['blocks_until_lottery'] as num? ?? 10).toInt(),
+        formulaWeights: (j['formula_weights'] as Map<String, dynamic>?) ?? {},
       );
 }
 
@@ -61,6 +290,11 @@ class AccountInfo {
   final String? salt;
   final String? publicKey;
   final String? privateKey;
+  final double activityScore;
+  final int activityRank;
+  final double lotteryTickets;
+  final double winProbabilityPct;
+  final ActivityBreakdown? activityBreakdown;
 
   const AccountInfo({
     required this.accountId,
@@ -72,6 +306,11 @@ class AccountInfo {
     this.salt,
     this.publicKey,
     this.privateKey,
+    this.activityScore = 0.0,
+    this.activityRank = 0,
+    this.lotteryTickets = 1.0,
+    this.winProbabilityPct = 0.0,
+    this.activityBreakdown,
   });
 
   factory AccountInfo.fromJson(Map<String, dynamic> j) => AccountInfo(
@@ -79,11 +318,19 @@ class AccountInfo {
         balances: WalletBalance.fromJson(j['balances'] ?? {}),
         frozenBalances: WalletBalance.fromJson(j['frozen_balances'] ?? {}),
         isVerified: j['is_verified'] ?? false,
-        verificationStatus: j['verification_status'] ?? (j['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
+        verificationStatus: j['verification_status'] ??
+            (j['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: j['nonce'] ?? 0,
         salt: j['salt'] as String?,
         publicKey: j['public_key'] as String?,
         privateKey: j['private_key'] as String?,
+        activityScore: (j['activity_score'] as num? ?? 0.0).toDouble(),
+        activityRank: (j['activity_rank'] as num? ?? 0).toInt(),
+        lotteryTickets: (j['lottery_tickets'] as num? ?? 1.0).toDouble(),
+        winProbabilityPct: (j['win_probability_pct'] as num? ?? 0.0).toDouble(),
+        activityBreakdown: j['activity_breakdown'] != null
+            ? ActivityBreakdown.fromJson(j['activity_breakdown'])
+            : null,
       );
 }
 
@@ -185,12 +432,14 @@ class NodeApiService {
 
   Future<ApiResult<Map<String, dynamic>>> _get(String path) async {
     try {
-      final resp = await http.get(_uri(path), headers: _headers).timeout(_timeout);
+      final resp =
+          await http.get(_uri(path), headers: _headers).timeout(_timeout);
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         return ApiResult.ok(body);
       }
-      return ApiResult.err(body['error']?.toString() ?? 'HTTP ${resp.statusCode}');
+      return ApiResult.err(
+          body['error']?.toString() ?? 'HTTP ${resp.statusCode}');
     } catch (e) {
       return ApiResult.err(e.toString());
     }
@@ -206,7 +455,8 @@ class NodeApiService {
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
         return ApiResult.ok(respBody);
       }
-      return ApiResult.err(respBody['error']?.toString() ?? 'HTTP ${resp.statusCode}');
+      return ApiResult.err(
+          respBody['error']?.toString() ?? 'HTTP ${resp.statusCode}');
     } catch (e) {
       return ApiResult.err(e.toString());
     }
@@ -218,40 +468,60 @@ class NodeApiService {
     return ApiResult.err(r.error);
   }
 
-  Future<ApiResult<AccountInfo>> login(String accountId, String password) async {
-    final r = await _post('/login', {'account_id': accountId, 'password': password});
+  Future<ApiResult<AccountInfo>> login(
+      String accountId, String password) async {
+    final cleanId = accountId.trim().replaceFirst(RegExp(r'^@'), '');
+    final r =
+        await _post('/login', {'account_id': cleanId, 'password': password});
     if (r.success && r.data!['success'] == true) {
+      final actualAccountId = r.data!['account_id'] as String? ?? cleanId;
       final acc = AccountInfo(
-        accountId: accountId,
+        accountId: actualAccountId,
         balances: WalletBalance.fromJson(r.data!['balances'] ?? {}),
-        frozenBalances: WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
+        frozenBalances:
+            WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
         isVerified: r.data!['is_verified'] ?? false,
-        verificationStatus: r.data!['verification_status'] ?? (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
+        verificationStatus: r.data!['verification_status'] ??
+            (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: r.data!['nonce'] ?? 0,
         salt: r.data!['salt'] as String?,
         publicKey: r.data!['public_key'] as String?,
       );
       return ApiResult.ok(acc);
     }
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Login failed');
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Login failed');
   }
 
-  Future<ApiResult<AccountInfo>> register(String accountId, String password) async {
-    final r = await _post('/register', {'account_id': accountId, 'password': password});
+  Future<ApiResult<AccountInfo>> register(
+      String accountId, String password, {String? studentId}) async {
+    final cleanId = accountId.trim().replaceFirst(RegExp(r'^@'), '');
+    final Map<String, dynamic> body = {
+      'account_id': cleanId,
+      'password': password,
+    };
+    if (studentId != null && studentId.trim().isNotEmpty) {
+      body['student_id'] = studentId.trim();
+    }
+    final r = await _post('/register', body);
     if (r.success && r.data!['success'] == true) {
+      final actualAccountId = r.data!['account_id'] as String? ?? cleanId;
       final acc = AccountInfo(
-        accountId: accountId,
+        accountId: actualAccountId,
         balances: WalletBalance.fromJson(r.data!['balances'] ?? {}),
-        frozenBalances: WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
+        frozenBalances:
+            WalletBalance.fromJson(r.data!['frozen_balances'] ?? {}),
         isVerified: r.data!['is_verified'] ?? false,
-        verificationStatus: r.data!['verification_status'] ?? (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
+        verificationStatus: r.data!['verification_status'] ??
+            (r.data!['is_verified'] == true ? 'VERIFIED' : 'PENDING'),
         nonce: r.data!['nonce'] ?? 0,
         salt: r.data!['salt'] as String?,
         publicKey: r.data!['public_key'] as String?,
       );
       return ApiResult.ok(acc);
     }
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Registration failed');
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Registration failed');
   }
 
   Future<ApiResult<AccountInfo>> getAccount(String accountId) async {
@@ -262,8 +532,10 @@ class NodeApiService {
 
   Future<ApiResult<bool>> submitTx(Map<String, dynamic> tx) async {
     final r = await _post('/tx/submit', tx);
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Transaction failed');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Transaction failed');
   }
 
   Future<ApiResult<List<Order>>> getOrders() async {
@@ -289,7 +561,8 @@ class NodeApiService {
   }
 
   Future<ApiResult<bool>> ping(String accountId, String token) async {
-    final r = await _post('/activity/ping', {'account_id': accountId, 'token': token});
+    final r = await _post(
+        '/activity/ping', {'account_id': accountId, 'token': token});
     if (r.success) return const ApiResult.ok(true);
     return ApiResult.err(r.error);
   }
@@ -299,7 +572,8 @@ class NodeApiService {
     int limit = 20,
     int offset = 0,
   }) async {
-    final query = 'account=${Uri.encodeComponent(accountId)}&limit=$limit&offset=$offset';
+    final query =
+        'account=${Uri.encodeComponent(accountId)}&limit=$limit&offset=$offset';
     final r = await _get('/transactions?$query');
     if (r.success) {
       final list = (r.data!['transactions'] as List? ?? [])
@@ -315,6 +589,7 @@ class NodeApiService {
     String? type,
     int? difficulty,
     String? creator,
+    String? viewer,
   }) async {
     final params = <String>[];
     if (category != null && category.isNotEmpty) {
@@ -328,6 +603,9 @@ class NodeApiService {
     }
     if (creator != null && creator.isNotEmpty) {
       params.add('creator=${Uri.encodeComponent(creator)}');
+    }
+    if (viewer != null && viewer.isNotEmpty) {
+      params.add('viewer=${Uri.encodeComponent(viewer)}');
     }
     final qs = params.isEmpty ? '' : '?${params.join('&')}';
     final r = await _get('/marketplace/jobs$qs');
@@ -346,7 +624,8 @@ class NodeApiService {
     if (r.success && r.data!['success'] == true) {
       return ApiResult.ok(r.data!);
     }
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to create job');
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to create job');
   }
 
   Future<ApiResult<Map<String, dynamic>>> claimMarketplaceJob({
@@ -362,20 +641,50 @@ class NodeApiService {
     if (r.success && r.data!['success'] == true) {
       return ApiResult.ok(r.data!);
     }
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Claim failed');
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Claim failed');
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> cancelMarketplaceJob({
+    required String accountId,
+    required String jobId,
+  }) async {
+    final r = await _post('/marketplace/cancel', {
+      'account_id': accountId,
+      'job_id': jobId,
+    });
+    if (r.success && r.data!['success'] == true) {
+      return ApiResult.ok(r.data!);
+    }
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Cancel failed');
+  }
+
+  Future<ApiResult<List<Map<String, dynamic>>>> getMempool() async {
+    final r = await _get('/mempool');
+    if (r.success) {
+      final list = (r.data!['mempool'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      return ApiResult.ok(list);
+    }
+    return ApiResult.err(r.error);
   }
 
   // ─────────────────────────── GROUPS ───────────────────────────
 
-  Future<ApiResult<Map<String, dynamic>>> getMyGroupsData(String accountId) async {
-    final r = await _get('/groups/member?account=${Uri.encodeComponent(accountId)}');
+  Future<ApiResult<Map<String, dynamic>>> getMyGroupsData(
+      String accountId) async {
+    final r =
+        await _get('/groups/member?account=${Uri.encodeComponent(accountId)}');
     if (r.success) return ApiResult.ok(r.data!);
     return ApiResult.err(r.error);
   }
 
   Future<ApiResult<Map<String, dynamic>>> getGroupInfo(String groupName) async {
     final r = await _get('/groups/info?name=${Uri.encodeComponent(groupName)}');
-    if (r.success) return ApiResult.ok(r.data!['group'] as Map<String, dynamic>);
+    if (r.success)
+      return ApiResult.ok(r.data!['group'] as Map<String, dynamic>);
     return ApiResult.err(r.error);
   }
 
@@ -393,8 +702,10 @@ class NodeApiService {
       'initial_deposit': initialDeposit,
       'entrance_fee': entranceFee ?? initialDeposit,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to create team');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to create team');
   }
 
   Future<ApiResult<bool>> leaveGroup({
@@ -405,8 +716,10 @@ class NodeApiService {
       'account_id': accountId,
       'group_name': groupName,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to leave team');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to leave team');
   }
 
   Future<ApiResult<bool>> transferFromTeam({
@@ -421,12 +734,15 @@ class NodeApiService {
       'recipient': recipient,
       'amount': amount,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Team transfer failed');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Team transfer failed');
   }
 
   Future<ApiResult<List<dynamic>>> getMyGroups(String accountId) async {
-    final r = await _get('/groups/member?account=${Uri.encodeComponent(accountId)}');
+    final r =
+        await _get('/groups/member?account=${Uri.encodeComponent(accountId)}');
     if (r.success && r.data != null) {
       final list = r.data!['my_groups'] as List<dynamic>? ?? [];
       return ApiResult.ok(list);
@@ -444,8 +760,10 @@ class NodeApiService {
       'group_name': groupName,
       'invitee': invitee,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to add member');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to add member');
   }
 
   Future<ApiResult<bool>> joinGroup({
@@ -456,8 +774,10 @@ class NodeApiService {
       'account_id': accountId,
       'group_name': groupName,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to join group');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to join group');
   }
 
   Future<ApiResult<bool>> createGroupPoll({
@@ -474,8 +794,10 @@ class NodeApiService {
       'title': title,
       'poll_payload': pollPayload,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to create poll');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to create poll');
   }
 
   Future<ApiResult<String>> voteGroupPoll({
@@ -493,7 +815,8 @@ class NodeApiService {
     if (r.success && r.data!['success'] == true) {
       return ApiResult.ok(r.data!['poll_status']?.toString() ?? 'OPEN');
     }
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to vote');
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to vote');
   }
 
   Future<ApiResult<bool>> executeGroupPoll({
@@ -506,14 +829,46 @@ class NodeApiService {
       'group_name': groupName,
       'poll_id': pollId,
     });
-    if (r.success && r.data!['success'] == true) return const ApiResult.ok(true);
-    return ApiResult.err(r.data?['error']?.toString() ?? r.error ?? 'Failed to execute poll');
+    if (r.success && r.data!['success'] == true)
+      return const ApiResult.ok(true);
+    return ApiResult.err(
+        r.data?['error']?.toString() ?? r.error ?? 'Failed to execute poll');
   }
 
-  Future<ApiResult<Map<String, dynamic>>> checkGroupAccount(String accountId) async {
+  Future<ApiResult<Map<String, dynamic>>> checkGroupAccount(
+      String accountId) async {
     final r = await _get('/groups/info?name=${Uri.encodeComponent(accountId)}');
-    if (r.success) return ApiResult.ok(r.data!['group'] as Map<String, dynamic>);
+    if (r.success)
+      return ApiResult.ok(r.data!['group'] as Map<String, dynamic>);
     return ApiResult.err(r.error);
   }
-}
 
+  Future<ApiResult<ActivityLeaderboardResponse>>
+      getActivityLeaderboard() async {
+    final r = await _get('/activity/leaderboard');
+    if (r.success && r.data != null) {
+      try {
+        return ApiResult.ok(ActivityLeaderboardResponse.fromJson(r.data!));
+      } catch (e) {
+        return ApiResult.err('Failed to parse activity data: $e');
+      }
+    }
+    return ApiResult.err(r.error ?? 'Failed to load activity leaderboard');
+  }
+
+  Future<ApiResult<StudentLeaderboardEntry>> getStudentActivityScore(
+      String accountId) async {
+    final r = await _get('/activity/account/${Uri.encodeComponent(accountId)}');
+    if (r.success && r.data != null) {
+      try {
+        final stud = r.data!['student'] as Map<String, dynamic>?;
+        if (stud != null) {
+          return ApiResult.ok(StudentLeaderboardEntry.fromJson(stud));
+        }
+      } catch (e) {
+        return ApiResult.err('Failed to parse student score: $e');
+      }
+    }
+    return ApiResult.err(r.error ?? 'Failed to load student activity score');
+  }
+}

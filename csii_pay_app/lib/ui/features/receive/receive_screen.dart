@@ -313,16 +313,19 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: _selectedToken == 'BDP'
-                                        ? Colors.transparent
+                                        ? const Color(0xFFD4AF37).withValues(alpha: 0.7)
                                         : AppColors.glassStroke,
+                                    width: _selectedToken == 'BDP' ? 1.5 : 1.0,
                                   ),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
-                                  'Layer-2: BDP',
+                                  'Character: BDP',
                                   style: GoogleFonts.outfit(
                                     fontWeight: FontWeight.w700,
-                                    color: Colors.white,
+                                    color: _selectedToken == 'BDP'
+                                        ? const Color(0xFFFFDF73)
+                                        : Colors.white,
                                   ),
                                 ),
                               ),

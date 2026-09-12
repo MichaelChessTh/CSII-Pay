@@ -17,6 +17,8 @@ class MarketplaceApplication {
   final DateTime createdAt;
   final String? worker;
   final Map<String, int> failedAttempts;
+  final String? teamName;
+  final String? author;
 
   MarketplaceApplication({
     required this.id,
@@ -37,6 +39,8 @@ class MarketplaceApplication {
     required this.createdAt,
     this.worker,
     this.failedAttempts = const {},
+    this.teamName,
+    this.author,
   });
 
   bool get isOpen => status == 'OPEN';
@@ -84,6 +88,8 @@ class MarketplaceApplication {
       createdAt: parseDate(json['created_at'] ?? json['createdAt']),
       worker: json['worker'],
       failedAttempts: parseFails(json['failed_attempts'] ?? json['failedAttempts']),
+      teamName: json['team_name'] ?? json['teamName'],
+      author: json['author'],
     );
   }
 
@@ -106,6 +112,8 @@ class MarketplaceApplication {
     'created_at': createdAt.millisecondsSinceEpoch ~/ 1000,
     if (worker != null) 'worker': worker,
     'failed_attempts': failedAttempts,
+    if (teamName != null) 'team_name': teamName,
+    if (author != null) 'author': author,
   };
 
   MarketplaceApplication copyWith({
@@ -127,6 +135,8 @@ class MarketplaceApplication {
     DateTime? createdAt,
     String? worker,
     Map<String, int>? failedAttempts,
+    String? teamName,
+    String? author,
   }) {
     return MarketplaceApplication(
       id: id ?? this.id,
@@ -147,6 +157,8 @@ class MarketplaceApplication {
       createdAt: createdAt ?? this.createdAt,
       worker: worker ?? this.worker,
       failedAttempts: failedAttempts ?? this.failedAttempts,
+      teamName: teamName ?? this.teamName,
+      author: author ?? this.author,
     );
   }
 }

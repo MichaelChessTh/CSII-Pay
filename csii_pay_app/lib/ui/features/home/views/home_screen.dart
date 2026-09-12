@@ -14,6 +14,7 @@ import 'package:csii_pay_app/ui/features/marketplace/marketplace_screen.dart';
 import 'package:csii_pay_app/ui/features/explorer/explorer_screen.dart';
 import 'package:csii_pay_app/ui/features/home/widgets/profile_dialog.dart';
 import 'package:csii_pay_app/ui/features/groups/groups_screen.dart';
+import 'package:csii_pay_app/ui/features/activity/activity_score_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -367,7 +368,7 @@ class _DashboardPageState extends State<_DashboardPage> {
                           ),
                         ),
                       _BalanceCard(
-                        label: 'Layer 1 — Base',
+                        label: 'Service Points (CSP)',
                         token: 'CSP',
                         balance: account?.balances.csp ?? 0.0,
                         gradient: AppColors.cspGradient,
@@ -375,7 +376,7 @@ class _DashboardPageState extends State<_DashboardPage> {
                       ),
                       const SizedBox(height: 12),
                       _BalanceCard(
-                        label: 'Layer 2 — Token',
+                        label: 'Character Points (BDP)',
                         token: 'BDP',
                         balance: account?.balances.bdp ?? 0.0,
                         frozenBalance: vm.frozenBdp,
@@ -396,7 +397,7 @@ class _DashboardPageState extends State<_DashboardPage> {
                         child: _QuickActionButton(
                           icon: Icons.arrow_upward_rounded,
                           label: 'Send',
-                          gradient: AppColors.bdpGradient,
+                          gradient: AppColors.basciiGoldGradient,
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -444,10 +445,100 @@ class _DashboardPageState extends State<_DashboardPage> {
                   ),
                 ),
               ),
+              // Activity Score & Lottery Banner
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                  child: InkWell(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ActivityScoreScreen()),
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            AppColors.brandPurple.withValues(alpha: 0.35),
+                            AppColors.bgCard,
+                            AppColors.brandTeal.withValues(alpha: 0.12),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.brandPurple.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.brandTeal.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.bolt_rounded, color: AppColors.brandTeal, size: 20),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      'Activity Score: ${vm.userActivityScore.toStringAsFixed(1)}',
+                                      style: GoogleFonts.outfit(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    if (vm.userActivityRank > 0) ...[
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: vm.userActivityRank == 1
+                                              ? AppColors.brandGold.withValues(alpha: 0.25)
+                                              : AppColors.brandViolet.withValues(alpha: 0.25),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          'Rank #${vm.userActivityRank}',
+                                          style: GoogleFonts.outfit(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: vm.userActivityRank == 1 ? AppColors.brandGold : AppColors.bdpColor,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '10th-block 0.1 BDP Lottery in ${vm.nodeStatus?.blocksUntilLottery ?? 10} blocks • Tap for details',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 11,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.textSecondary, size: 14),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               // Network status
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
                   child: _NetworkCard(vm: vm),
                 ),
               ),
@@ -558,6 +649,7 @@ class _BalanceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isBdp = token == 'BDP';
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -565,11 +657,19 @@ class _BalanceCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: gradient.colors.first.withValues(alpha: 0.25),
-            blurRadius: 20,
+            color: isBdp
+                ? const Color(0xFFD4AF37).withValues(alpha: 0.20)
+                : gradient.colors.first.withValues(alpha: 0.25),
+            blurRadius: isBdp ? 24 : 20,
             offset: const Offset(0, 8),
           ),
         ],
+        border: Border.all(
+          color: isBdp
+              ? const Color(0xFFD4AF37).withValues(alpha: 0.65)
+              : Colors.white.withValues(alpha: 0.15),
+          width: isBdp ? 1.5 : 1.0,
+        ),
       ),
       child: Row(
         children: [
@@ -580,9 +680,12 @@ class _BalanceCard extends StatelessWidget {
                 Text(
                   label,
                   style: GoogleFonts.outfit(
-                    color: Colors.white.withValues(alpha: 0.8),
+                    color: isBdp
+                        ? const Color(0xFFE5C058)
+                        : Colors.white.withValues(alpha: 0.8),
                     fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: isBdp ? 0.4 : 0,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -590,15 +693,17 @@ class _BalanceCard extends StatelessWidget {
                   value: balance,
                   symbol: token,
                   textStyle: GoogleFonts.outfit(
-                    color: Colors.white,
+                    color: isBdp ? const Color(0xFFFFF7E2) : Colors.white,
                     fontSize: 30,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.5,
                   ),
                   symbolStyle: GoogleFonts.outfit(
-                    color: Colors.white.withValues(alpha: 0.8),
+                    color: isBdp
+                        ? const Color(0xFFE5C058)
+                        : Colors.white.withValues(alpha: 0.8),
                     fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 if (frozenBalance > 0) ...[
@@ -606,21 +711,29 @@ class _BalanceCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.2),
+                      color: Colors.black.withValues(alpha: 0.35),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                      border: Border.all(
+                        color: isBdp
+                            ? const Color(0xFFD4AF37).withValues(alpha: 0.4)
+                            : Colors.white.withValues(alpha: 0.2),
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.lock_clock_rounded, size: 12, color: Colors.white70),
+                        Icon(
+                          Icons.lock_clock_rounded,
+                          size: 12,
+                          color: isBdp ? const Color(0xFFE5C058) : Colors.white70,
+                        ),
                         const SizedBox(width: 4),
                         Text(
                           '${frozenBalance.toStringAsFixed(0)} $token Locked (Pending Verification)',
                           style: GoogleFonts.outfit(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
-                            color: Colors.white.withValues(alpha: 0.9),
+                            color: isBdp ? const Color(0xFFFFF7E2) : Colors.white.withValues(alpha: 0.9),
                           ),
                         ),
                       ],
@@ -633,10 +746,19 @@ class _BalanceCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
+              color: isBdp
+                  ? const Color(0xFF262016)
+                  : Colors.white.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(14),
+              border: isBdp
+                  ? Border.all(color: const Color(0xFFD4AF37).withValues(alpha: 0.65), width: 1.5)
+                  : null,
             ),
-            child: Icon(icon, color: Colors.white, size: 28),
+            child: Icon(
+              icon,
+              color: isBdp ? const Color(0xFFFFDF73) : Colors.white,
+              size: 28,
+            ),
           ),
         ],
       ),
@@ -741,8 +863,13 @@ class _NetworkCard extends StatelessWidget {
                 value: '#${status?.blockHeight ?? 0}',
               ),
               _StatItem(
-                label: 'Peers',
-                value: '${status?.peersCount ?? 0}',
+                label: 'Activity',
+                value: vm.userActivityScore.toStringAsFixed(1),
+                isHighlighted: true,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ActivityScoreScreen()),
+                ),
               ),
               _StatItem(
                 label: 'Mempool',
@@ -761,33 +888,64 @@ class _NetworkCard extends StatelessWidget {
 }
 
 class _StatItem extends StatelessWidget {
-  const _StatItem({required this.label, required this.value});
+  const _StatItem({
+    required this.label,
+    required this.value,
+    this.isHighlighted = false,
+    this.onTap,
+  });
   final String label;
   final String value;
+  final bool isHighlighted;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: GoogleFonts.outfit(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+    final content = Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              value,
+              style: GoogleFonts.outfit(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: isHighlighted ? AppColors.brandTeal : AppColors.textPrimary,
+              ),
             ),
+            if (onTap != null) ...[
+              const SizedBox(width: 2),
+              const Icon(Icons.touch_app_rounded, size: 10, color: AppColors.brandTeal),
+            ],
+          ],
+        ),
+        Text(
+          label,
+          style: GoogleFonts.outfit(
+            fontSize: 10,
+            color: isHighlighted ? AppColors.brandTeal : AppColors.textMuted,
+            fontWeight: isHighlighted ? FontWeight.w600 : FontWeight.normal,
           ),
-          Text(
-            label,
-            style: GoogleFonts.outfit(
-              fontSize: 10,
-              color: AppColors.textMuted,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
+
+    if (onTap != null) {
+      return Expanded(
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: content,
+          ),
+        ),
+      );
+    }
+
+    return Expanded(child: content);
   }
 }
 
@@ -824,6 +982,10 @@ class _TransactionTile extends StatelessWidget {
       title = 'Exchange Escrow';
       icon = Icons.swap_horiz_rounded;
       iconColor = const Color(0xFF3B82F6);
+    } else if (tx.action == 'ORDER_CANCEL') {
+      title = 'Order Cancelled (Refund)';
+      icon = Icons.replay_rounded;
+      iconColor = AppColors.brandTeal;
     } else if (tx.action == 'ORDER_FULFILL') {
       title = 'Atomic Swap';
       icon = Icons.swap_horiz_rounded;
@@ -832,6 +994,11 @@ class _TransactionTile extends StatelessWidget {
       title = 'Account Welcome Bonus';
       icon = Icons.card_giftcard_rounded;
       iconColor = AppColors.brandPurple;
+    } else if (tx.action == 'ACCOUNT_VERIFY') {
+      final isVer = tx.payload['status'] == 'VERIFIED';
+      title = isVer ? 'Council Verification (Bonus Unlocked)' : 'Verification Rejected';
+      icon = isVer ? Icons.verified_user_rounded : Icons.gpp_bad_rounded;
+      iconColor = isVer ? AppColors.success : AppColors.error;
     } else if (isIncoming) {
       title = 'Received from @${tx.sender}';
       icon = Icons.south_west_rounded;

@@ -292,21 +292,28 @@ class _CasualBuyViewState extends State<_CasualBuyView> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
-                        color: _buyToken == 'BDP' ? AppColors.brandPurple : Colors.transparent,
+                        color: _buyToken == 'BDP' ? const Color(0xFF221C14) : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
+                        border: _buyToken == 'BDP'
+                            ? Border.all(color: const Color(0xFFD4AF37).withValues(alpha: 0.65), width: 1.2)
+                            : null,
                       ),
                       alignment: Alignment.center,
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.diamond_outlined, size: 16, color: Colors.white),
+                          Icon(
+                            Icons.diamond_outlined,
+                            size: 16,
+                            color: _buyToken == 'BDP' ? const Color(0xFFFFDF73) : AppColors.textSecondary,
+                          ),
                           const SizedBox(width: 6),
                           Text(
-                            'Buy BDP (with CSP)',
+                            'Buy Character Points (BDP)',
                             style: GoogleFonts.outfit(
                               fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: _buyToken == 'BDP' ? Colors.white : AppColors.textSecondary,
+                              fontSize: 12,
+                              color: _buyToken == 'BDP' ? const Color(0xFFFFDF73) : AppColors.textSecondary,
                             ),
                           ),
                         ],
@@ -337,10 +344,10 @@ class _CasualBuyViewState extends State<_CasualBuyView> {
                           const Icon(Icons.account_balance_wallet_outlined, size: 16, color: Colors.white),
                           const SizedBox(width: 6),
                           Text(
-                            'Buy CSP (with BDP)',
+                            'Buy Service Points (CSP)',
                             style: GoogleFonts.outfit(
                               fontWeight: FontWeight.w700,
-                              fontSize: 13,
+                              fontSize: 12,
                               color: _buyToken == 'CSP' ? Colors.white : AppColors.textSecondary,
                             ),
                           ),
@@ -522,7 +529,12 @@ class _CasualBuyViewState extends State<_CasualBuyView> {
                     const SizedBox(width: 8),
                     _percentChip('75%', () => setState(() => _payCtrl.text = (userPayBalance * 0.75).toStringAsFixed(2))),
                     const SizedBox(width: 8),
-                    _percentChip('MAX', () => setState(() => _payCtrl.text = userPayBalance.toStringAsFixed(2))),
+                    _percentChip('MAX', () {
+                      final maxCap = (preview.maxPayableForLiquidity > 0 && preview.maxPayableForLiquidity < userPayBalance)
+                          ? preview.maxPayableForLiquidity
+                          : userPayBalance;
+                      setState(() => _payCtrl.text = maxCap.toStringAsFixed(2));
+                    }),
                   ],
                 ),
               ],
@@ -592,23 +604,49 @@ class _CasualBuyViewState extends State<_CasualBuyView> {
                 ],
               ),
             )
-          else if (payAmount > 0 && !preview.hasSufficientLiquidity)
+          else if (preview.maxPayableForLiquidity > 0 && payAmount > preview.maxPayableForLiquidity)
             Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withValues(alpha: 0.15),
+                color: AppColors.error.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Amount exceeds total exchange liquidity (${preview.totalAvailableLiquidity.toStringAsFixed(2)} $_buyToken). Partial fill will occur.',
-                      style: GoogleFonts.outfit(fontSize: 12, color: Colors.orangeAccent, fontWeight: FontWeight.w600),
+                  Row(
+                    children: [
+                      const Icon(Icons.block_rounded, color: AppColors.error, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Amount exceeds total exchange liquidity (${preview.totalAvailableLiquidity.toStringAsFixed(2)} $_buyToken). Max allowed: ${preview.maxPayableForLiquidity.toStringAsFixed(2)} $payToken.',
+                          style: GoogleFonts.outfit(fontSize: 12, color: AppColors.error, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: () {
+                      final cap = preview.maxPayableForLiquidity < userPayBalance
+                          ? preview.maxPayableForLiquidity
+                          : userPayBalance;
+                      setState(() => _payCtrl.text = cap.toStringAsFixed(2));
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: AppColors.brandPurple.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppColors.brandPurple),
+                      ),
+                      child: Text(
+                        'Set to Max Liquidity (${preview.maxPayableForLiquidity.toStringAsFixed(2)} $payToken)',
+                        style: GoogleFonts.outfit(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ],
@@ -624,6 +662,7 @@ class _CasualBuyViewState extends State<_CasualBuyView> {
             onPressed: (_isSwapping ||
                     payAmount <= 0 ||
                     payAmount > userPayBalance ||
+                    (preview.maxPayableForLiquidity > 0 && payAmount > preview.maxPayableForLiquidity) ||
                     preview.receivedAmount <= 0)
                 ? null
                 : () async {
@@ -707,13 +746,13 @@ class _CasualSellView extends StatefulWidget {
 class _CasualSellViewState extends State<_CasualSellView> {
   String _sellToken = 'BDP';
   final _amountCtrl = TextEditingController();
-  final _rateCtrl = TextEditingController();
+  final _receiveCtrl = TextEditingController();
   bool _isPlacing = false;
 
   @override
   void dispose() {
     _amountCtrl.dispose();
-    _rateCtrl.dispose();
+    _receiveCtrl.dispose();
     super.dispose();
   }
 
@@ -722,9 +761,9 @@ class _CasualSellViewState extends State<_CasualSellView> {
     final vm = context.watch<WalletViewModel>();
     final receiveToken = _sellToken == 'BDP' ? 'CSP' : 'BDP';
     final userSellBalance = _sellToken == 'BDP' ? vm.bdpBalance : vm.cspBalance;
-    final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0.0;
-    final rate = double.tryParse(_rateCtrl.text.trim()) ?? 0.0;
-    final receiveAmount = amount * rate;
+    final sellAmount = double.tryParse(_amountCtrl.text.trim()) ?? 0.0;
+    final receiveAmount = double.tryParse(_receiveCtrl.text.trim()) ?? 0.0;
+    final computedRate = (sellAmount > 0 && receiveAmount > 0) ? (receiveAmount / sellAmount) : 0.0;
 
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
@@ -748,27 +787,35 @@ class _CasualSellViewState extends State<_CasualSellView> {
                         setState(() {
                           _sellToken = 'BDP';
                           _amountCtrl.clear();
+                          _receiveCtrl.clear();
                         });
                       }
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
-                        color: _sellToken == 'BDP' ? AppColors.brandPurple : Colors.transparent,
+                        color: _sellToken == 'BDP' ? const Color(0xFF221C14) : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
+                        border: _sellToken == 'BDP'
+                            ? Border.all(color: const Color(0xFFD4AF37).withValues(alpha: 0.65), width: 1.2)
+                            : null,
                       ),
                       alignment: Alignment.center,
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.diamond_outlined, size: 16, color: Colors.white),
+                          Icon(
+                            Icons.diamond_outlined,
+                            size: 16,
+                            color: _sellToken == 'BDP' ? const Color(0xFFFFDF73) : AppColors.textSecondary,
+                          ),
                           const SizedBox(width: 6),
                           Text(
-                            'Sell BDP (Get CSP)',
+                            'Sell Character Points (BDP)',
                             style: GoogleFonts.outfit(
                               fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: _sellToken == 'BDP' ? Colors.white : AppColors.textSecondary,
+                              fontSize: 12,
+                              color: _sellToken == 'BDP' ? const Color(0xFFFFDF73) : AppColors.textSecondary,
                             ),
                           ),
                         ],
@@ -783,6 +830,7 @@ class _CasualSellViewState extends State<_CasualSellView> {
                         setState(() {
                           _sellToken = 'CSP';
                           _amountCtrl.clear();
+                          _receiveCtrl.clear();
                         });
                       }
                     },
@@ -799,10 +847,10 @@ class _CasualSellViewState extends State<_CasualSellView> {
                           const Icon(Icons.account_balance_wallet_outlined, size: 16, color: Colors.white),
                           const SizedBox(width: 6),
                           Text(
-                            'Sell CSP (Get BDP)',
+                            'Sell Service Points (CSP)',
                             style: GoogleFonts.outfit(
                               fontWeight: FontWeight.w700,
-                              fontSize: 13,
+                              fontSize: 12,
                               color: _sellToken == 'CSP' ? Colors.white : AppColors.textSecondary,
                             ),
                           ),
@@ -895,14 +943,14 @@ class _CasualSellViewState extends State<_CasualSellView> {
           ),
           const SizedBox(height: 14),
 
-          // Desired Rate Card
+          // Desired Receive Amount Card
           GlassCard(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Desired Rate ($receiveToken per 1 $_sellToken)',
+                  'Amount You Want to Receive ($receiveToken)',
                   style: GoogleFonts.outfit(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
@@ -911,7 +959,7 @@ class _CasualSellViewState extends State<_CasualSellView> {
                 ),
                 const SizedBox(height: 10),
                 TextField(
-                  controller: _rateCtrl,
+                  controller: _receiveCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   style: GoogleFonts.outfit(
                     fontSize: 20,
@@ -919,10 +967,10 @@ class _CasualSellViewState extends State<_CasualSellView> {
                     color: AppColors.textPrimary,
                   ),
                   decoration: InputDecoration(
-                    hintText: 'e.g. 1.20',
+                    hintText: '0.00',
                     hintStyle: GoogleFonts.outfit(color: AppColors.textMuted),
-                    suffixText: '$receiveToken / $_sellToken',
-                    suffixStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, color: AppColors.brandTeal, fontSize: 12),
+                    suffixText: receiveToken,
+                    suffixStyle: GoogleFonts.outfit(fontWeight: FontWeight.w700, color: AppColors.brandTeal),
                     filled: true,
                     fillColor: AppColors.bgSurface,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -942,14 +990,14 @@ class _CasualSellViewState extends State<_CasualSellView> {
           ),
           const SizedBox(height: 14),
 
-          // Calculated Received Amount Card
+          // Computed Rate Card
           GlassCard(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'You Will Receive',
+                  'Computed Exchange Rate',
                   style: GoogleFonts.outfit(
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
@@ -959,12 +1007,18 @@ class _CasualSellViewState extends State<_CasualSellView> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Text(
-                      '≈ ${receiveAmount.toStringAsFixed(2)} $receiveToken',
-                      style: GoogleFonts.outfit(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.success,
+                    const Icon(Icons.auto_awesome_rounded, color: AppColors.brandTeal, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        computedRate > 0
+                            ? '1 $_sellToken = ${computedRate.toStringAsFixed(3)} $receiveToken'
+                            : 'Enter amounts above to calculate rate',
+                        style: GoogleFonts.outfit(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: computedRate > 0 ? AppColors.brandTeal : AppColors.textMuted,
+                        ),
                       ),
                     ),
                   ],
@@ -979,7 +1033,7 @@ class _CasualSellViewState extends State<_CasualSellView> {
           ),
           const SizedBox(height: 14),
 
-          if (amount > userSellBalance)
+          if (sellAmount > userSellBalance)
             Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(12),
@@ -1006,17 +1060,16 @@ class _CasualSellViewState extends State<_CasualSellView> {
           GradientButton(
             label: _isPlacing ? 'Placing Order...' : 'Confirm & Place Sell Order',
             icon: Icons.check_circle_outline_rounded,
-            onPressed: (_isPlacing || amount <= 0 || rate <= 0 || amount > userSellBalance)
+            onPressed: (_isPlacing || sellAmount <= 0 || receiveAmount <= 0 || sellAmount > userSellBalance)
                 ? null
                 : () async {
                     final messenger = ScaffoldMessenger.of(context);
                     setState(() => _isPlacing = true);
-                    final reqAmt = amount * rate;
                     final err = await vm.createOrder(
                       offerToken: _sellToken,
-                      offerAmount: amount,
+                      offerAmount: sellAmount,
                       requestToken: receiveToken,
-                      requestAmount: reqAmt,
+                      requestAmount: receiveAmount,
                       allowPartial: true,
                     );
                     if (!mounted) return;
@@ -1031,7 +1084,7 @@ class _CasualSellViewState extends State<_CasualSellView> {
                     );
                     if (err == null) {
                       _amountCtrl.clear();
-                      _rateCtrl.clear();
+                      _receiveCtrl.clear();
                       widget.onOrderCreated();
                     }
                   },
